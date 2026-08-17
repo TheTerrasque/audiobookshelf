@@ -22,6 +22,10 @@
       <div v-for="opt in backgroundOptions" :key="opt.value" class="w-full cursor-pointer hover:bg-black-200 px-3 py-1" :class="background === opt.value ? 'bg-black-200' : ''" @click="setBackground(opt.value)">
         <p class="text-sm">{{ opt.label }}</p>
       </div>
+      <p class="text-xs uppercase text-gray-400 px-3 pt-2 pb-1">Behavior</p>
+      <div class="w-full cursor-pointer hover:bg-black-200 px-3 py-1" :class="scrollToTopOnPageChange ? 'bg-black-200' : ''" @click="toggleScrollToTopOnPageChange">
+        <p class="text-sm">Scroll to top on page change</p>
+      </div>
     </div>
 
     <div v-if="numPages" class="absolute top-0 left-4 sm:left-8 bg-bg text-gray-100 border-b border-l border-r border-gray-400 hover:bg-black-200 cursor-pointer rounded-b-md w-10 h-9 flex items-center justify-center text-center z-20" @mousedown.prevent @click.stop.prevent="clickShowPageMenu">
@@ -103,6 +107,7 @@ export default {
       pageImageUrls: Object.create(null),
       fitMode: 'fitScreen',
       background: 'black',
+      scrollToTopOnPageChange: true,
       containerSize: { width: 0, height: 0 },
       imageNaturalSize: { width: 0, height: 0 },
       resizeObserver: null
@@ -289,6 +294,18 @@ export default {
       this.background = value
       this.showOptionsMenu = false
     },
+    toggleScrollToTopOnPageChange() {
+      this.scrollToTopOnPageChange = !this.scrollToTopOnPageChange
+      this.showOptionsMenu = false
+    },
+    scrollToTop() {
+      if (!this.scrollToTopOnPageChange) return
+      const imageContainer = this.$refs.imageContainer
+      if (imageContainer) {
+        imageContainer.scrollTop = 0
+        imageContainer.scrollLeft = 0
+      }
+    },
     updateProgress() {
       if (!this.keepProgress || !this.numPages || !this.libraryItemId) return
       if (this.savedPage === this.page) {
@@ -327,6 +344,7 @@ export default {
       this.preloadPage(pageNumber + 1)
     },
     displayPage(pageNumber) {
+      this.scrollToTop()
       const cachedUrl = this.pageImageUrls[pageNumber]
       if (cachedUrl) {
         this.clearLoadTimeout()
