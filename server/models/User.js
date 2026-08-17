@@ -74,6 +74,7 @@ const { DataTypes, Model } = sequelize
  * @property {boolean} [hideFromContinueListening]
  * @property {string} [ebookLocation]
  * @property {number} [ebookProgress]
+ * @property {string} [ebookFileIno]
  * @property {string} [finishedAt]
  * @property {number} [lastUpdate]
  * @property {number} [markAsFinishedTimeRemaining]
@@ -808,6 +809,7 @@ class User extends Model {
         hideFromContinueListening: !!progressPayload.hideFromContinueListening,
         ebookLocation: progressPayload.ebookLocation || null,
         ebookProgress: isNullOrNaN(progressPayload.ebookProgress) ? 0 : Number(progressPayload.ebookProgress),
+        ebookFileIno: progressPayload.ebookFileIno || null,
         finishedAt: progressPayload.finishedAt || null,
         createdAt: progressPayload.createdAt || new Date(),
         extraData: {

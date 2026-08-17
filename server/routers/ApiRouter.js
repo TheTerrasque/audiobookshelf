@@ -128,6 +128,7 @@ class ApiRouter {
     this.router.get('/items/:id/ebook/:fileid?/pages/:page', LibraryItemController.middleware.bind(this), LibraryItemController.getEBookPageImage.bind(this))
     this.router.get('/items/:id/ebook/:fileid?', LibraryItemController.middleware.bind(this), LibraryItemController.getEBookFile.bind(this))
     this.router.patch('/items/:id/ebook/:fileid/status', LibraryItemController.middleware.bind(this), LibraryItemController.updateEbookFileStatus.bind(this))
+    this.router.patch('/items/:id/ebook', LibraryItemController.middleware.bind(this), LibraryItemController.updateEbookFiles.bind(this))
 
     //
     // User Routes

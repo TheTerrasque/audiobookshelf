@@ -41,8 +41,10 @@
       <span class="material-symbols text-xl">tune</span>
     </div>
 
-    <div v-if="numPages" class="absolute top-0 right-14 sm:right-16 bg-bg text-gray-100 border-b border-l border-r border-gray-400 rounded-b-md px-2 h-9 flex items-center text-center z-20">
-      <p class="font-mono">{{ page }} / {{ numPages }}</p>
+    <div v-if="numPages" class="absolute top-0 right-14 sm:right-16 bg-bg text-gray-100 border-b border-l border-r border-gray-400 rounded-b-md px-2 h-9 flex items-center text-center z-20" :title="currentFileTitle">
+      <p class="font-mono text-xs sm:text-sm">
+        <span v-if="comicFiles.length > 1">{{ currentFileIndex + 1 }}/{{ comicFiles.length }} &middot; </span>{{ page }} / {{ numPages }}
+      </p>
     </div>
     <div v-if="mainImg && fitMode === 'custom'" class="absolute top-0 right-36 sm:right-40 bg-bg text-gray-100 border-b border-l border-r border-gray-400 rounded-b-md px-2 h-9 flex items-center text-center z-20">
       <ui-icon-btn icon="zoom_out" :size="8" :disabled="!canScaleDown" borderless class="mr-px" @click="zoomOut" />
@@ -110,7 +112,12 @@ export default {
       scrollToTopOnPageChange: true,
       containerSize: { width: 0, height: 0 },
       imageNaturalSize: { width: 0, height: 0 },
-      resizeObserver: null
+      resizeObserver: null,
+      // The file currently being read. Starts out resolved from the fileId prop / saved
+      // progress, then moves as the user navigates to sibling comic files (see switchFile).
+      currentFileIno: this.resolveInitialFileIno(),
+      // 'start' | 'end' | null - which page to land on once the manifest for a file switch loads
+      pendingLandOn: null
     }
   },
   watch: {
@@ -131,7 +138,7 @@ export default {
     ebookBaseUrl() {
       if (!this.libraryItemId) return null
       const baseUrl = `/api/items/${this.libraryItemId}/ebook`
-      return this.fileId ? `${baseUrl}/${this.fileId}` : baseUrl
+      return this.currentFileIno ? `${baseUrl}/${this.currentFileIno}` : baseUrl
     },
     manifestUrl() {
       return this.ebookBaseUrl ? `${this.ebookBaseUrl}/pages` : null
@@ -142,19 +149,51 @@ export default {
     comicMetadataKeys() {
       return this.comicMetadata ? Object.keys(this.comicMetadata) : []
     },
+    // Sibling comic (cbz/cbr) files on this library item, in their configured order
+    comicFiles() {
+      return (this.libraryItem?.libraryFiles || []).filter((lf) => lf.fileType === 'ebook' && this.isComicFile(lf))
+    },
+    currentFileIndex() {
+      return this.comicFiles.findIndex((lf) => this.sameIno(lf.ino, this.currentFileIno))
+    },
+    hasNextFile() {
+      return this.currentFileIndex >= 0 && this.currentFileIndex < this.comicFiles.length - 1
+    },
+    hasPrevFile() {
+      return this.currentFileIndex > 0
+    },
+    nextFile() {
+      return this.hasNextFile ? this.comicFiles[this.currentFileIndex + 1] : null
+    },
+    prevFile() {
+      return this.hasPrevFile ? this.comicFiles[this.currentFileIndex - 1] : null
+    },
+    currentFileTitle() {
+      const file = this.comicFiles[this.currentFileIndex]
+      return file?.metadata?.filename || null
+    },
     canGoNext() {
-      return this.page < this.numPages
+      return this.page < this.numPages || this.hasNextFile
     },
     canGoPrev() {
-      return this.page > 1
+      return this.page > 1 || this.hasPrevFile
     },
     userMediaProgress() {
       if (!this.libraryItemId) return
       return this.$store.getters['user/getUserMediaProgress'](this.libraryItemId)
     },
+    // Whether userMediaProgress.ebookLocation belongs to the file currently being read.
+    // Progress saved before per-file tracking existed has no ebookFileIno - trust it only
+    // for the primary ebook file so older progress isn't silently lost.
+    isSavedProgressForCurrentFile() {
+      const savedIno = this.userMediaProgress?.ebookFileIno
+      if (savedIno) return this.sameIno(savedIno, this.currentFileIno)
+      return this.sameIno(this.currentFileIno, this.libraryItem?.media?.ebookFile?.ino)
+    },
     savedPage() {
       if (!this.keepProgress) return 0
       if (!this.userMediaProgress?.ebookLocation || isNaN(this.userMediaProgress.ebookLocation)) return 0
+      if (!this.isSavedProgressForCurrentFile) return 0
       return Number(this.userMediaProgress.ebookLocation)
     },
     cleanedPageNames() {
@@ -243,7 +282,14 @@ export default {
 
         if (this.numPages > 0) {
           this.loading = false
-          const startPage = this.savedPage > 0 && this.savedPage <= this.numPages ? this.savedPage : 1
+          let startPage
+          if (this.pendingLandOn === 'end') {
+            startPage = this.numPages
+          } else if (this.pendingLandOn === 'start') {
+            startPage = 1
+          } else {
+            startPage = this.savedPage > 0 && this.savedPage <= this.numPages ? this.savedPage : 1
+          }
           this.setPage(startPage)
         } else {
           this.loading = false
@@ -253,6 +299,8 @@ export default {
         console.error('ComicReader.loadManifest failed:', error)
         this.$toast.error('Failed to load comic pages')
         this.loading = false
+      } finally {
+        this.pendingLandOn = null
       }
     },
     calculatePageMenuWidth() {
@@ -313,7 +361,8 @@ export default {
       }
       const payload = {
         ebookLocation: this.page,
-        ebookProgress: Math.max(0, Math.min(1, (Number(this.page) - 1) / Number(this.numPages)))
+        ebookProgress: Math.max(0, Math.min(1, (Number(this.page) - 1) / Number(this.numPages))),
+        ebookFileIno: this.currentFileIno
       }
       this.$axios.$patch(`/api/me/progress/${this.libraryItemId}`, payload, { progress: false }).catch((error) => {
         console.error('ComicReader.updateProgress failed:', error)
@@ -325,12 +374,40 @@ export default {
       if (this.showOptionsMenu) this.showOptionsMenu = false
     },
     next() {
-      if (!this.canGoNext) return
-      this.setPage(this.page + 1)
+      if (this.page < this.numPages) {
+        this.setPage(this.page + 1)
+      } else if (this.hasNextFile) {
+        this.switchFile(this.nextFile.ino, 'start')
+      }
     },
     prev() {
-      if (!this.canGoPrev) return
-      this.setPage(this.page - 1)
+      if (this.page > 1) {
+        this.setPage(this.page - 1)
+      } else if (this.hasPrevFile) {
+        this.switchFile(this.prevFile.ino, 'end')
+      }
+    },
+    switchFile(ino, landOn) {
+      this.showPageMenu = false
+      this.showInfoMenu = false
+      this.pendingLandOn = landOn
+      this.currentFileIno = ino
+    },
+    isComicFile(libraryFile) {
+      const ext = (libraryFile?.metadata?.ext || '').toLowerCase()
+      return ext === '.cbz' || ext === '.cbr'
+    },
+    sameIno(a, b) {
+      return a !== null && a !== undefined && b !== null && b !== undefined && String(a) === String(b)
+    },
+    resolveInitialFileIno() {
+      if (this.fileId) return this.fileId
+      if (this.keepProgress) {
+        const savedIno = this.$store.getters['user/getUserMediaProgress'](this.libraryItem?.id)?.ebookFileIno
+        const isSiblingComicFile = (this.libraryItem?.libraryFiles || []).some((lf) => lf.fileType === 'ebook' && this.isComicFile(lf) && this.sameIno(lf.ino, savedIno))
+        if (savedIno && isSiblingComicFile) return savedIno
+      }
+      return this.libraryItem?.media?.ebookFile?.ino ?? null
     },
     setPage(pageNumber) {
       if (pageNumber <= 0 || pageNumber > this.numPages) return

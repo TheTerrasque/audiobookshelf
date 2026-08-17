@@ -1332,11 +1332,56 @@ class LibraryItemController {
   }
 
   /**
+   * PATCH: /api/items/:id/ebook
+   * Reorder the ebook files of a book by the order of the provided inos.
+   * Non-ebook library files keep their relative order and are kept after the ebook files.
    *
-   * @param {RequestWithUser} req
+   * @param {LibraryItemControllerRequest} req
    * @param {Response} res
-   * @param {NextFunction} next
    */
+  async updateEbookFiles(req, res) {
+    const orderedFileData = req.body?.orderedFileData
+
+    if (!req.libraryItem.isBook) {
+      Logger.error(`[LibraryItemController] updateEbookFiles invalid media type ${req.libraryItem.id}`)
+      return res.sendStatus(400)
+    }
+    if (!Array.isArray(orderedFileData) || !orderedFileData.length) {
+      Logger.error(`[LibraryItemController] updateEbookFiles invalid orderedFileData ${req.libraryItem.id}`)
+      return res.sendStatus(400)
+    }
+
+    const ebookInos = new Set(req.libraryItem.getLibraryFiles().filter((lf) => lf.isEBookFile).map((lf) => lf.ino))
+
+    // Ensure that each orderedFileData has a valid ino and is an ebook library file
+    if (orderedFileData.some((fileData) => !fileData?.ino || !ebookInos.has(fileData.ino))) {
+      Logger.error(`[LibraryItemController] updateEbookFiles invalid orderedFileData ${req.libraryItem.id}`)
+      return res.sendStatus(400)
+    }
+    // Ensure the ordered list contains each ebook file exactly once
+    const orderedInos = new Set(orderedFileData.map((fileData) => fileData.ino))
+    if (orderedInos.size !== ebookInos.size) {
+      Logger.error(`[LibraryItemController] updateEbookFiles orderedFileData does not match the ebook files ${req.libraryItem.id}`)
+      return res.sendStatus(400)
+    }
+
+    const orderedEbookFiles = orderedFileData.map((fileData) => req.libraryItem.libraryFiles.find((lf) => lf.ino === fileData.ino))
+    const nonEbookFiles = req.libraryItem.libraryFiles.filter((lf) => !ebookInos.has(lf.ino))
+
+    req.libraryItem.libraryFiles = [...orderedEbookFiles, ...nonEbookFiles]
+    req.libraryItem.changed('libraryFiles', true)
+    await req.libraryItem.save()
+
+    SocketAuthority.libraryItemEmitter('item_updated', req.libraryItem)
+    res.json(req.libraryItem.toOldJSON())
+  }
+
+  /**
+    *
+    * @param {RequestWithUser} req
+    * @param {Response} res
+    * @param {NextFunction} next
+    */
   async middleware(req, res, next) {
     req.libraryItem = await Database.libraryItemModel.getExpandedById(req.params.id)
     if (!req.libraryItem?.media) return res.sendStatus(404)
