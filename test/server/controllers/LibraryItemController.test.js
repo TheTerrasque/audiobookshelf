@@ -286,6 +286,88 @@ describe('LibraryItemController', () => {
     })
   })
 
+  describe('updateEbookFiles', () => {
+    const makeLibraryFile = (ino, filename, { isSupplementary = true, fileType = 'ebook' } = {}) => ({
+      ino,
+      metadata: {
+        path: `/fake/${filename}`,
+        relPath: filename,
+        filename,
+        format: fileType === 'ebook' ? 'cbz' : 'jpg',
+        ext: fileType === 'ebook' ? '.cbz' : '.jpg',
+        size: 100
+      },
+      isSupplementary,
+      addedAt: Date.now(),
+      updatedAt: Date.now()
+    })
+
+    async function createBookWithFiles(libraryFiles) {
+      const newBook = await Database.bookModel.create({ title: 'Comic Book', audioFiles: [], tags: [], narrators: [], genres: [], chapters: [] })
+      const newLibrary = await Database.libraryModel.create({ name: 'Test Library', mediaType: 'book' })
+      const newLibraryFolder = await Database.libraryFolderModel.create({ path: '/test', libraryId: newLibrary.id })
+      const newLibraryItem = await Database.libraryItemModel.create({ libraryFiles, mediaId: newBook.id, mediaType: 'book', libraryId: newLibrary.id, libraryFolderId: newLibraryFolder.id })
+      return Database.libraryItemModel.getExpandedById(newLibraryItem.id)
+    }
+
+    it('reorders ebook files and keeps non-ebook files after them', async () => {
+      const libraryItem = await createBookWithFiles([
+        makeLibraryFile('1', 'vol1.cbz'),
+        makeLibraryFile('2', 'vol2.cbz'),
+        makeLibraryFile('3', 'cover.jpg', { fileType: 'image' })
+      ])
+
+      const fakeReq = { body: { orderedFileData: [{ ino: '2' }, { ino: '1' }] }, libraryItem }
+      const fakeRes = { json: sinon.spy(), sendStatus: sinon.spy() }
+
+      await LibraryItemController.updateEbookFiles.bind(apiRouter)(fakeReq, fakeRes)
+
+      expect(fakeRes.json.calledOnce).to.be.true
+      const savedInos = libraryItem.libraryFiles.map((lf) => lf.ino)
+      expect(savedInos).to.deep.equal(['2', '1', '3'])
+    })
+
+    it('returns 400 for a non-book media type', async () => {
+      const libraryItem = { isBook: false, id: 'fake-id' }
+      const fakeReq = { body: { orderedFileData: [{ ino: '1' }] }, libraryItem }
+      const fakeRes = { json: sinon.spy(), sendStatus: sinon.spy() }
+
+      await LibraryItemController.updateEbookFiles.bind(apiRouter)(fakeReq, fakeRes)
+
+      expect(fakeRes.sendStatus.calledWith(400)).to.be.true
+    })
+
+    it('returns 400 for missing orderedFileData', async () => {
+      const libraryItem = await createBookWithFiles([makeLibraryFile('1', 'vol1.cbz')])
+      const fakeReq = { body: {}, libraryItem }
+      const fakeRes = { json: sinon.spy(), sendStatus: sinon.spy() }
+
+      await LibraryItemController.updateEbookFiles.bind(apiRouter)(fakeReq, fakeRes)
+
+      expect(fakeRes.sendStatus.calledWith(400)).to.be.true
+    })
+
+    it('returns 400 when an ino is not an ebook file', async () => {
+      const libraryItem = await createBookWithFiles([makeLibraryFile('1', 'vol1.cbz'), makeLibraryFile('2', 'cover.jpg', { fileType: 'image' })])
+      const fakeReq = { body: { orderedFileData: [{ ino: '2' }] }, libraryItem }
+      const fakeRes = { json: sinon.spy(), sendStatus: sinon.spy() }
+
+      await LibraryItemController.updateEbookFiles.bind(apiRouter)(fakeReq, fakeRes)
+
+      expect(fakeRes.sendStatus.calledWith(400)).to.be.true
+    })
+
+    it('returns 400 when orderedFileData does not include every ebook file', async () => {
+      const libraryItem = await createBookWithFiles([makeLibraryFile('1', 'vol1.cbz'), makeLibraryFile('2', 'vol2.cbz')])
+      const fakeReq = { body: { orderedFileData: [{ ino: '1' }] }, libraryItem }
+      const fakeRes = { json: sinon.spy(), sendStatus: sinon.spy() }
+
+      await LibraryItemController.updateEbookFiles.bind(apiRouter)(fakeReq, fakeRes)
+
+      expect(fakeRes.sendStatus.calledWith(400)).to.be.true
+    })
+  })
+
   describe('batch item access control', () => {
     let lib1Id
     let itemLib1Id

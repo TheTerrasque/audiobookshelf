@@ -6,6 +6,7 @@
         <span class="text-sm font-mono">{{ ebookFiles.length }}</span>
       </div>
       <div class="grow" />
+      <ui-btn v-if="canReorder && !reordering" small color="bg-primary" class="mr-2 hidden md:block" @click.stop="startReorder">{{ $strings.ButtonReorder }}</ui-btn>
       <ui-btn v-if="userIsAdmin" small :color="showFullPath ? 'bg-gray-600' : 'bg-primary'" class="mr-2 hidden md:block" @click.stop="toggleFullPath">{{ $strings.ButtonFullPath }}</ui-btn>
       <div class="cursor-pointer h-10 w-10 rounded-full hover:bg-black-400 flex justify-center items-center duration-500" :class="showFiles ? 'transform rotate-180' : ''">
         <span class="material-symbols text-4xl">&#xe313;</span>
@@ -13,7 +14,12 @@
     </div>
     <transition name="slide">
       <div class="w-full" v-show="showFiles">
-        <table class="text-sm tracksTable">
+        <div v-if="reordering" class="w-full px-4 py-2 flex items-center bg-primary/40 text-sm">
+          <p class="grow">{{ $strings.MessageDragFilesIntoEbookOrder }}</p>
+          <ui-btn small color="bg-primary" class="mr-2" :disabled="savingOrder" @click.stop="cancelReorder">{{ $strings.ButtonCancel }}</ui-btn>
+          <ui-btn small color="bg-success" :loading="savingOrder" @click.stop="saveOrder">{{ $strings.ButtonSaveOrder }}</ui-btn>
+        </div>
+        <table v-if="!reordering" class="text-sm tracksTable">
           <tr>
             <th class="text-left px-4">{{ $strings.LabelPath }}</th>
             <th class="text-left w-24 min-w-24">{{ $strings.LabelSize }}</th>
@@ -26,13 +32,30 @@
             <tables-ebook-files-table-row :key="file.path" :libraryItemId="libraryItemId" :showFullPath="showFullPath" :file="file" @read="readEbook" />
           </template>
         </table>
+        <table v-else class="text-sm tracksTable">
+          <tr>
+            <th class="w-10"></th>
+            <th class="text-left px-4">{{ $strings.LabelPath }}</th>
+          </tr>
+          <draggable v-model="reorderFiles" v-bind="dragOptions" tag="tbody">
+            <tr v-for="file in reorderFiles" :key="file.ino" class="list-group-item">
+              <td class="text-center w-10"><span class="material-symbols drag-handle align-middle text-lg text-gray-400 hover:text-gray-50">reorder</span></td>
+              <td class="px-4 truncate">{{ showFullPath ? file.metadata.path : file.metadata.relPath }}</td>
+            </tr>
+          </draggable>
+        </table>
       </div>
     </transition>
   </div>
 </template>
 
 <script>
+import draggable from 'vuedraggable'
+
 export default {
+  components: {
+    draggable
+  },
   props: {
     libraryItem: {
       type: Object,
@@ -42,7 +65,14 @@ export default {
   data() {
     return {
       showFiles: false,
-      showFullPath: false
+      showFullPath: false,
+      reordering: false,
+      savingOrder: false,
+      reorderFiles: [],
+      dragOptions: {
+        animation: 200,
+        ghostClass: 'ghost'
+      }
     }
   },
   computed: {
@@ -67,6 +97,9 @@ export default {
     showMoreColumn() {
       return this.userCanDelete || this.userCanDownload || (this.userCanUpdate && !this.libraryIsAudiobooksOnly)
     },
+    canReorder() {
+      return this.userCanUpdate && !this.libraryIsAudiobooksOnly && this.ebookFiles.length > 1
+    },
     ebookFiles() {
       return (this.libraryItem.libraryFiles || []).filter((lf) => lf.fileType === 'ebook')
     }
@@ -81,6 +114,33 @@ export default {
     },
     clickBar() {
       this.showFiles = !this.showFiles
+    },
+    startReorder() {
+      this.reorderFiles = this.ebookFiles.slice()
+      this.reordering = true
+      this.showFiles = true
+    },
+    cancelReorder() {
+      this.reordering = false
+      this.reorderFiles = []
+    },
+    saveOrder() {
+      const orderedFileData = this.reorderFiles.map((file) => ({ ino: file.ino }))
+      this.savingOrder = true
+      this.$axios
+        .$patch(`/api/items/${this.libraryItemId}/ebook`, { orderedFileData })
+        .then(() => {
+          this.$toast.success('Ebook order updated')
+          this.reordering = false
+          this.reorderFiles = []
+        })
+        .catch((error) => {
+          console.error('Failed to update ebook order', error)
+          this.$toast.error('Failed to update ebook order')
+        })
+        .finally(() => {
+          this.savingOrder = false
+        })
     }
   },
   mounted() {

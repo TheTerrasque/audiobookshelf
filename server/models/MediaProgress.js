@@ -24,6 +24,8 @@ class MediaProgress extends Model {
     this.ebookLocation
     /** @type {number} */
     this.ebookProgress
+    /** @type {string} */
+    this.ebookFileIno
     /** @type {Date} */
     this.finishedAt
     /** @type {Object} */
@@ -70,6 +72,7 @@ class MediaProgress extends Model {
         hideFromContinueListening: DataTypes.BOOLEAN,
         ebookLocation: DataTypes.STRING,
         ebookProgress: DataTypes.FLOAT,
+        ebookFileIno: DataTypes.STRING,
         finishedAt: DataTypes.DATE,
         extraData: DataTypes.JSON,
         podcastId: DataTypes.UUID
@@ -169,6 +172,7 @@ class MediaProgress extends Model {
       hideFromContinueListening: !!this.hideFromContinueListening,
       ebookLocation: this.ebookLocation,
       ebookProgress: this.ebookProgress,
+      ebookFileIno: this.ebookFileIno,
       lastUpdate: this.updatedAt.valueOf(),
       startedAt: this.createdAt.valueOf(),
       finishedAt: this.finishedAt?.valueOf() || null
