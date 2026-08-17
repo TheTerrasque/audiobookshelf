@@ -16,6 +16,8 @@
       <div class="w-full" v-show="showFiles">
         <div v-if="reordering" class="w-full px-4 py-2 flex items-center bg-primary/40 text-sm">
           <p class="grow">{{ $strings.MessageDragFilesIntoEbookOrder }}</p>
+          <ui-btn small color="bg-primary" class="mr-2" :disabled="!selectedInos.length" @click.stop="moveSelectedToTop">{{ $strings.ButtonMoveToTop }}</ui-btn>
+          <ui-btn small color="bg-primary" class="mr-2" :disabled="!selectedInos.length" @click.stop="moveSelectedToBottom">{{ $strings.ButtonMoveToBottom }}</ui-btn>
           <ui-btn small color="bg-primary" class="mr-2" :disabled="savingOrder" @click.stop="cancelReorder">{{ $strings.ButtonCancel }}</ui-btn>
           <ui-btn small color="bg-success" :loading="savingOrder" @click.stop="saveOrder">{{ $strings.ButtonSaveOrder }}</ui-btn>
         </div>
@@ -35,11 +37,13 @@
         <table v-else class="text-sm tracksTable">
           <tr>
             <th class="w-10"></th>
+            <th class="w-10 text-center"><input type="checkbox" :checked="allSelected" @change="toggleSelectAll" /></th>
             <th class="text-left px-4">{{ $strings.LabelPath }}</th>
           </tr>
           <draggable v-model="reorderFiles" v-bind="dragOptions" tag="tbody">
             <tr v-for="file in reorderFiles" :key="file.ino" class="list-group-item">
               <td class="text-center w-10"><span class="material-symbols drag-handle align-middle text-lg text-gray-400 hover:text-gray-50">reorder</span></td>
+              <td class="text-center w-10"><input type="checkbox" :checked="selectedInos.includes(file.ino)" @change="toggleSelected(file.ino)" @click.stop /></td>
               <td class="px-4 truncate">{{ showFullPath ? file.metadata.path : file.metadata.relPath }}</td>
             </tr>
           </draggable>
@@ -69,9 +73,11 @@ export default {
       reordering: false,
       savingOrder: false,
       reorderFiles: [],
+      selectedInos: [],
       dragOptions: {
         animation: 200,
-        ghostClass: 'ghost'
+        ghostClass: 'ghost',
+        handle: '.drag-handle'
       }
     }
   },
@@ -102,6 +108,9 @@ export default {
     },
     ebookFiles() {
       return (this.libraryItem.libraryFiles || []).filter((lf) => lf.fileType === 'ebook')
+    },
+    allSelected() {
+      return !!this.reorderFiles.length && this.selectedInos.length === this.reorderFiles.length
     }
   },
   methods: {
@@ -117,12 +126,34 @@ export default {
     },
     startReorder() {
       this.reorderFiles = this.ebookFiles.slice()
+      this.selectedInos = []
       this.reordering = true
       this.showFiles = true
     },
     cancelReorder() {
       this.reordering = false
       this.reorderFiles = []
+      this.selectedInos = []
+    },
+    toggleSelected(ino) {
+      if (this.selectedInos.includes(ino)) {
+        this.selectedInos = this.selectedInos.filter((i) => i !== ino)
+      } else {
+        this.selectedInos = [...this.selectedInos, ino]
+      }
+    },
+    toggleSelectAll() {
+      this.selectedInos = this.allSelected ? [] : this.reorderFiles.map((file) => file.ino)
+    },
+    moveSelectedToTop() {
+      const selected = this.reorderFiles.filter((file) => this.selectedInos.includes(file.ino))
+      const rest = this.reorderFiles.filter((file) => !this.selectedInos.includes(file.ino))
+      this.reorderFiles = [...selected, ...rest]
+    },
+    moveSelectedToBottom() {
+      const selected = this.reorderFiles.filter((file) => this.selectedInos.includes(file.ino))
+      const rest = this.reorderFiles.filter((file) => !this.selectedInos.includes(file.ino))
+      this.reorderFiles = [...rest, ...selected]
     },
     saveOrder() {
       const orderedFileData = this.reorderFiles.map((file) => ({ ino: file.ino }))
@@ -133,6 +164,7 @@ export default {
           this.$toast.success('Ebook order updated')
           this.reordering = false
           this.reorderFiles = []
+          this.selectedInos = []
         })
         .catch((error) => {
           console.error('Failed to update ebook order', error)
