@@ -1171,8 +1171,12 @@ class LibraryItemController {
     if (req.params.fileid) {
       ebookFile = req.libraryItem.getLibraryFileWithIno(req.params.fileid)
       if (!ebookFile?.isEBookFile) {
-        Logger.error(`[LibraryItemController] Invalid ebook file id "${req.params.fileid}"`)
-        return null
+        // Fallback for files scanned before the format was stored (e.g. missing metadata.ext)
+        const extFormat = Path.extname(ebookFile?.metadata.path || '').slice(1).toLowerCase()
+        if (extFormat !== 'cbz' && extFormat !== 'cbr') {
+          Logger.error(`[LibraryItemController] Invalid ebook file id "${req.params.fileid}"`)
+          return null
+        }
       }
     } else {
       ebookFile = req.libraryItem.media.ebookFile
@@ -1182,7 +1186,11 @@ class LibraryItemController {
       Logger.error(`[LibraryItemController] No ebookFile for library item "${req.libraryItem.media.title}"`)
       return null
     }
-    const ebookFormat = (ebookFile.ebookFormat || '').toLowerCase()
+    let ebookFormat = (ebookFile.ebookFormat || '').toLowerCase()
+    if (!ebookFormat) {
+      // Fallback for files scanned before the format was stored (e.g. missing metadata.ext)
+      ebookFormat = Path.extname(ebookFile.metadata.path || '').slice(1).toLowerCase()
+    }
     if (ebookFormat !== 'cbz' && ebookFormat !== 'cbr') {
       Logger.error(`[LibraryItemController] Ebook file "${ebookFile.metadata.filename}" is not a comic book (format: "${ebookFormat}")`)
       return null
