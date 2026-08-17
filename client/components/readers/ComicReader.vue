@@ -101,7 +101,7 @@ export default {
       scale: 100,
       manifestRevision: null,
       pageImageUrls: Object.create(null),
-      fitMode: 'fitWidth',
+      fitMode: 'fitScreen',
       background: 'black',
       containerSize: { width: 0, height: 0 },
       imageNaturalSize: { width: 0, height: 0 },
