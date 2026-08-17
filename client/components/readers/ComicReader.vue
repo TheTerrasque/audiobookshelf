@@ -1,11 +1,11 @@
 <template>
   <div class="w-full h-full">
-    <div v-show="showPageMenu" v-click-outside="clickOutside" class="pagemenu absolute top-9 left-8 rounded-md overflow-y-auto bg-bg shadow-lg z-20 border border-gray-400" :style="{ width: pageMenuWidth + 'px' }">
-      <div v-for="(file, index) in cleanedPageNames" :key="file" class="w-full cursor-pointer hover:bg-black-200 px-2 py-1" :class="page === index + 1 ? 'bg-black-200' : ''" @click="setPage(index + 1)">
-        <p class="text-sm truncate">{{ file }}</p>
+    <div v-show="showPageMenu" v-click-outside="clickOutside" class="pagemenu absolute top-9 left-4 sm:left-8 rounded-md overflow-y-auto bg-bg shadow-lg z-20 border border-gray-400" :style="{ width: pageMenuWidth + 'px' }">
+      <div v-for="(file, index) in cleanedPageNames" :key="index" class="w-full cursor-pointer hover:bg-black-200 px-2 py-1" :class="page === index + 1 ? 'bg-black-200' : ''" @click="setPage(index + 1)">
+        <p class="text-sm truncate">{{ index + 1 }}. {{ file }}</p>
       </div>
     </div>
-    <div v-show="showInfoMenu" v-click-outside="clickOutside" class="pagemenu absolute top-9 left-20 rounded-md overflow-y-auto bg-bg shadow-lg z-20 border border-gray-400 w-96">
+    <div v-show="showInfoMenu" v-click-outside="clickOutside" class="pagemenu absolute top-9 left-16 sm:left-20 rounded-md overflow-y-auto bg-bg shadow-lg z-20 border border-gray-400 w-96">
       <div v-for="key in comicMetadataKeys" :key="key" class="w-full px-2 py-1">
         <p class="text-xs">
           <strong>{{ key }}</strong
@@ -13,7 +13,7 @@
         </p>
       </div>
     </div>
-    <div v-show="showOptionsMenu" v-click-outside="clickOutside" class="pagemenu absolute top-9 left-8 rounded-md overflow-y-auto bg-bg shadow-lg z-20 border border-gray-400 w-52">
+    <div v-show="showOptionsMenu" v-click-outside="clickOutside" class="pagemenu absolute top-9 left-28 sm:left-32 rounded-md overflow-y-auto bg-bg shadow-lg z-20 border border-gray-400 w-52">
       <p class="text-xs uppercase text-gray-400 px-3 pt-2 pb-1">Fit</p>
       <div v-for="opt in fitModeOptions" :key="opt.value" class="w-full cursor-pointer hover:bg-black-200 px-3 py-1" :class="fitMode === opt.value ? 'bg-black-200' : ''" @click="setFitMode(opt.value)">
         <p class="text-sm truncate">{{ opt.label }}</p>
@@ -27,29 +27,33 @@
         <p class="text-sm">Scroll to top on page change</p>
       </div>
     </div>
-
-    <div v-if="numPages" class="absolute top-0 left-4 sm:left-8 bg-bg text-gray-100 border-b border-l border-r border-gray-400 hover:bg-black-200 cursor-pointer rounded-b-md w-10 h-9 flex items-center justify-center text-center z-20" @mousedown.prevent @click.stop.prevent="clickShowPageMenu">
-      <span class="material-symbols text-xl">menu</span>
-    </div>
-    <div v-if="comicMetadata" class="absolute top-0 left-16 sm:left-20 bg-bg text-gray-100 border-b border-l border-r border-gray-400 hover:bg-black-200 cursor-pointer rounded-b-md w-10 h-9 flex items-center justify-center text-center z-20" @mousedown.prevent @click.stop.prevent="clickShowInfoMenu">
-      <span class="material-symbols text-xl">more</span>
-    </div>
-    <a v-if="pages && numPages" :href="mainImg" :download="currentPageName" class="absolute top-0 bg-bg text-gray-100 border-b border-l border-r border-gray-400 hover:bg-black-200 cursor-pointer rounded-b-md w-10 h-9 flex items-center justify-center text-center z-20" :class="comicMetadata ? 'left-28 sm:left-32' : 'left-16 sm:left-20'">
-      <span class="material-symbols text-xl">download</span>
-    </a>
-    <div v-if="numPages" class="absolute top-0 bg-bg text-gray-100 border-b border-l border-r border-gray-400 hover:bg-black-200 cursor-pointer rounded-b-md w-10 h-9 flex items-center justify-center text-center z-20" :class="comicMetadata ? 'left-40 sm:left-44' : 'left-28 sm:left-32'" @mousedown.prevent @click.stop.prevent="clickShowOptionsMenu">
-      <span class="material-symbols text-xl">tune</span>
+    <div v-show="showFileMenu" v-click-outside="clickOutside" class="pagemenu absolute top-9 right-4 sm:right-8 rounded-md overflow-y-auto bg-bg shadow-lg z-20 border border-gray-400 w-72 sm:w-96">
+      <div v-for="(file, index) in comicFiles" :key="file.ino" class="w-full cursor-pointer hover:bg-black-200 px-2 py-1" :class="index === currentFileIndex ? 'bg-black-200' : ''" @click="jumpToFile(index)">
+        <p class="text-sm truncate">{{ index + 1 }}. {{ file.metadata.filename }}</p>
+      </div>
     </div>
 
-    <div v-if="numPages" class="absolute top-0 right-14 sm:right-16 bg-bg text-gray-100 border-b border-l border-r border-gray-400 rounded-b-md px-2 h-9 flex items-center text-center z-20" :title="currentFileTitle">
-      <p class="font-mono text-xs sm:text-sm">
-        <span v-if="comicFiles.length > 1">{{ currentFileIndex + 1 }}/{{ comicFiles.length }} &middot; </span>{{ page }} / {{ numPages }}
-      </p>
+    <div class="absolute top-0 left-4 sm:left-8 z-20 flex items-center gap-2">
+      <div v-if="numPages" class="bg-bg text-gray-100 border-b border-l border-r border-gray-400 hover:bg-black-200 cursor-pointer rounded-b-md px-3 h-9 flex items-center justify-center text-center" @mousedown.prevent @click.stop.prevent="clickShowPageMenu">
+        <p class="font-mono text-xs sm:text-sm">{{ page }} / {{ numPages }}</p>
+      </div>
+      <div v-if="comicMetadata" class="bg-bg text-gray-100 border-b border-l border-r border-gray-400 hover:bg-black-200 cursor-pointer rounded-b-md w-10 h-9 flex items-center justify-center text-center" @mousedown.prevent @click.stop.prevent="clickShowInfoMenu">
+        <span class="material-symbols text-xl">more</span>
+      </div>
+      <div v-if="numPages" class="bg-bg text-gray-100 border-b border-l border-r border-gray-400 hover:bg-black-200 cursor-pointer rounded-b-md w-10 h-9 flex items-center justify-center text-center" @mousedown.prevent @click.stop.prevent="clickShowOptionsMenu">
+        <span class="material-symbols text-xl">tune</span>
+      </div>
     </div>
-    <div v-if="mainImg && fitMode === 'custom'" class="absolute top-0 right-36 sm:right-40 bg-bg text-gray-100 border-b border-l border-r border-gray-400 rounded-b-md px-2 h-9 flex items-center text-center z-20">
-      <ui-icon-btn icon="zoom_out" :size="8" :disabled="!canScaleDown" borderless class="mr-px" @click="zoomOut" />
-      <span class="font-mono text-xs w-12 text-center">{{ scale }}%</span>
-      <ui-icon-btn icon="zoom_in" :size="8" :disabled="!canScaleUp" borderless class="ml-px" @click="zoomIn" />
+
+    <div class="absolute top-0 right-14 sm:right-16 z-20 flex items-center gap-2">
+      <div v-if="mainImg && fitMode === 'custom'" class="bg-bg text-gray-100 border-b border-l border-r border-gray-400 rounded-b-md px-2 h-9 flex items-center text-center">
+        <ui-icon-btn icon="zoom_out" :size="8" :disabled="!canScaleDown" borderless class="mr-px" @click="zoomOut" />
+        <span class="font-mono text-xs w-12 text-center">{{ scale }}%</span>
+        <ui-icon-btn icon="zoom_in" :size="8" :disabled="!canScaleUp" borderless class="ml-px" @click="zoomIn" />
+      </div>
+      <div v-if="numPages && comicFiles.length > 1" class="bg-bg text-gray-100 border-b border-l border-r border-gray-400 hover:bg-black-200 cursor-pointer rounded-b-md px-3 h-9 flex items-center text-center" :title="currentFileTitle" @mousedown.prevent @click.stop.prevent="clickShowFileMenu">
+        <p class="font-mono text-xs sm:text-sm">{{ currentFileIndex + 1 }} / {{ comicFiles.length }}</p>
+      </div>
     </div>
 
     <div class="w-full h-full relative" :style="{ backgroundColor: backgroundColor }">
@@ -101,6 +105,7 @@ export default {
       showPageMenu: false,
       showInfoMenu: false,
       showOptionsMenu: false,
+      showFileMenu: false,
       loadTimeout: null,
       loadedFirstPage: false,
       comicMetadata: null,
@@ -215,9 +220,6 @@ export default {
     canScaleDown() {
       return this.scale > MIN_SCALE
     },
-    currentPageName() {
-      return this.pages?.[this.page - 1]?.displayName || this.pages?.[this.page - 1]?.name || null
-    },
     fitModeOptions() {
       return [
         { value: 'fitWidth', label: 'Fit to width' },
@@ -262,6 +264,7 @@ export default {
       this.showPageMenu = false
       this.showInfoMenu = false
       this.showOptionsMenu = false
+      this.showFileMenu = false
       this.loadedFirstPage = false
       this.comicMetadata = null
       this.manifestRevision = null
@@ -322,17 +325,32 @@ export default {
     clickShowPageMenu() {
       this.showInfoMenu = false
       this.showOptionsMenu = false
+      this.showFileMenu = false
       this.showPageMenu = !this.showPageMenu
     },
     clickShowInfoMenu() {
       this.showPageMenu = false
       this.showOptionsMenu = false
+      this.showFileMenu = false
       this.showInfoMenu = !this.showInfoMenu
     },
     clickShowOptionsMenu() {
       this.showPageMenu = false
       this.showInfoMenu = false
+      this.showFileMenu = false
       this.showOptionsMenu = !this.showOptionsMenu
+    },
+    clickShowFileMenu() {
+      this.showPageMenu = false
+      this.showInfoMenu = false
+      this.showOptionsMenu = false
+      this.showFileMenu = !this.showFileMenu
+    },
+    jumpToFile(index) {
+      this.showFileMenu = false
+      const file = this.comicFiles[index]
+      if (!file || index === this.currentFileIndex) return
+      this.switchFile(file.ino, 'start')
     },
     setFitMode(value) {
       this.fitMode = value
@@ -372,6 +390,7 @@ export default {
       if (this.showPageMenu) this.showPageMenu = false
       if (this.showInfoMenu) this.showInfoMenu = false
       if (this.showOptionsMenu) this.showOptionsMenu = false
+      if (this.showFileMenu) this.showFileMenu = false
     },
     next() {
       if (this.page < this.numPages) {
@@ -390,6 +409,7 @@ export default {
     switchFile(ino, landOn) {
       this.showPageMenu = false
       this.showInfoMenu = false
+      this.showFileMenu = false
       this.pendingLandOn = landOn
       this.currentFileIno = ino
     },
@@ -415,6 +435,7 @@ export default {
       if (!selectedPage) return
       this.showPageMenu = false
       this.showInfoMenu = false
+      this.showFileMenu = false
       this.page = pageNumber
       this.updateProgress()
       this.displayPage(pageNumber)
