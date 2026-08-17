@@ -13,6 +13,16 @@
         </p>
       </div>
     </div>
+    <div v-show="showOptionsMenu" v-click-outside="clickOutside" class="pagemenu absolute top-9 left-8 rounded-md overflow-y-auto bg-bg shadow-lg z-20 border border-gray-400 w-52">
+      <p class="text-xs uppercase text-gray-400 px-3 pt-2 pb-1">Fit</p>
+      <div v-for="opt in fitModeOptions" :key="opt.value" class="w-full cursor-pointer hover:bg-black-200 px-3 py-1" :class="fitMode === opt.value ? 'bg-black-200' : ''" @click="setFitMode(opt.value)">
+        <p class="text-sm truncate">{{ opt.label }}</p>
+      </div>
+      <p class="text-xs uppercase text-gray-400 px-3 pt-2 pb-1">Background</p>
+      <div v-for="opt in backgroundOptions" :key="opt.value" class="w-full cursor-pointer hover:bg-black-200 px-3 py-1" :class="background === opt.value ? 'bg-black-200' : ''" @click="setBackground(opt.value)">
+        <p class="text-sm">{{ opt.label }}</p>
+      </div>
+    </div>
 
     <div v-if="numPages" class="absolute top-0 left-4 sm:left-8 bg-bg text-gray-100 border-b border-l border-r border-gray-400 hover:bg-black-200 cursor-pointer rounded-b-md w-10 h-9 flex items-center justify-center text-center z-20" @mousedown.prevent @click.stop.prevent="clickShowPageMenu">
       <span class="material-symbols text-xl">menu</span>
@@ -23,16 +33,20 @@
     <a v-if="pages && numPages" :href="mainImg" :download="currentPageName" class="absolute top-0 bg-bg text-gray-100 border-b border-l border-r border-gray-400 hover:bg-black-200 cursor-pointer rounded-b-md w-10 h-9 flex items-center justify-center text-center z-20" :class="comicMetadata ? 'left-28 sm:left-32' : 'left-16 sm:left-20'">
       <span class="material-symbols text-xl">download</span>
     </a>
+    <div v-if="numPages" class="absolute top-0 bg-bg text-gray-100 border-b border-l border-r border-gray-400 hover:bg-black-200 cursor-pointer rounded-b-md w-10 h-9 flex items-center justify-center text-center z-20" :class="comicMetadata ? 'left-40 sm:left-44' : 'left-28 sm:left-32'" @mousedown.prevent @click.stop.prevent="clickShowOptionsMenu">
+      <span class="material-symbols text-xl">tune</span>
+    </div>
 
     <div v-if="numPages" class="absolute top-0 right-14 sm:right-16 bg-bg text-gray-100 border-b border-l border-r border-gray-400 rounded-b-md px-2 h-9 flex items-center text-center z-20">
       <p class="font-mono">{{ page }} / {{ numPages }}</p>
     </div>
-    <div v-if="mainImg" class="absolute top-0 right-36 sm:right-40 bg-bg text-gray-100 border-b border-l border-r border-gray-400 rounded-b-md px-2 h-9 flex items-center text-center z-20">
+    <div v-if="mainImg && fitMode === 'custom'" class="absolute top-0 right-36 sm:right-40 bg-bg text-gray-100 border-b border-l border-r border-gray-400 rounded-b-md px-2 h-9 flex items-center text-center z-20">
       <ui-icon-btn icon="zoom_out" :size="8" :disabled="!canScaleDown" borderless class="mr-px" @click="zoomOut" />
+      <span class="font-mono text-xs w-12 text-center">{{ scale }}%</span>
       <ui-icon-btn icon="zoom_in" :size="8" :disabled="!canScaleUp" borderless class="ml-px" @click="zoomIn" />
     </div>
 
-    <div class="w-full h-full relative">
+    <div class="w-full h-full relative" :style="{ backgroundColor: backgroundColor }">
       <div v-show="canGoPrev" ref="prevButton" class="absolute top-0 left-0 h-full w-1/2 lg:w-1/3 hover:opacity-100 opacity-0 z-10 cursor-pointer" @click.stop.prevent="prev" @mousedown.prevent>
         <div class="flex items-center justify-center h-full w-1/2">
           <span v-show="loadedFirstPage" class="material-symbols text-5xl text-white/30 cursor-pointer hover:text-white/90">arrow_back_ios</span>
@@ -44,8 +58,8 @@
         </div>
       </div>
       <div ref="imageContainer" class="w-full h-full relative overflow-auto">
-        <div class="h-full flex" :class="scale > 100 ? '' : 'justify-center'">
-          <img v-if="mainImg" :style="{ minWidth: scale + '%', width: scale + '%' }" :src="mainImg" class="object-contain m-auto" @load="handleImageLoad" />
+        <div class="flex" :class="imageWrapperClass">
+          <img v-if="mainImg" :style="imageStyle" :src="mainImg" class="object-contain m-auto" @load="handleImageLoad" />
         </div>
       </div>
       <div v-show="loading" class="w-full h-full absolute top-0 left-0 flex items-center justify-center z-10">
@@ -80,12 +94,18 @@ export default {
       pageMenuWidth: 256,
       showPageMenu: false,
       showInfoMenu: false,
+      showOptionsMenu: false,
       loadTimeout: null,
       loadedFirstPage: false,
       comicMetadata: null,
-      scale: 80,
+      scale: 100,
       manifestRevision: null,
-      pageImageUrls: Object.create(null)
+      pageImageUrls: Object.create(null),
+      fitMode: 'fitWidth',
+      background: 'black',
+      containerSize: { width: 0, height: 0 },
+      imageNaturalSize: { width: 0, height: 0 },
+      resizeObserver: null
     }
   },
   watch: {
@@ -153,6 +173,39 @@ export default {
     },
     currentPageName() {
       return this.pages?.[this.page - 1]?.displayName || this.pages?.[this.page - 1]?.name || null
+    },
+    fitModeOptions() {
+      return [
+        { value: 'fitWidth', label: 'Fit to width' },
+        { value: 'fitScreen', label: 'Fit to screen' },
+        { value: 'custom', label: 'Custom zoom' }
+      ]
+    },
+    backgroundOptions() {
+      return [
+        { value: 'black', label: 'Black' },
+        { value: 'dark', label: 'Dark gray' },
+        { value: 'white', label: 'White' }
+      ]
+    },
+    backgroundColor() {
+      if (this.background === 'white') return '#ffffff'
+      if (this.background === 'dark') return '#1a1a1a'
+      return '#000000'
+    },
+    imageStyle() {
+      const { width: cw, height: ch } = this.containerSize
+      const { width: nw, height: nh } = this.imageNaturalSize
+      if (this.fitMode === 'custom') {
+        if (!cw) return {}
+        return { width: Math.round((cw * this.scale) / 100) + 'px' }
+      }
+      if (!cw || !ch || !nw || !nh) return {}
+      const factor = this.fitMode === 'fitScreen' ? Math.min(cw / nw, ch / nh) : cw / nw
+      return { width: Math.round(nw * factor) + 'px' }
+    },
+    imageWrapperClass() {
+      return 'min-w-full min-h-full flex items-center justify-center'
     }
   },
   methods: {
@@ -164,6 +217,7 @@ export default {
       this.pageMenuWidth = 256
       this.showPageMenu = false
       this.showInfoMenu = false
+      this.showOptionsMenu = false
       this.loadedFirstPage = false
       this.comicMetadata = null
       this.manifestRevision = null
@@ -214,11 +268,26 @@ export default {
     },
     clickShowPageMenu() {
       this.showInfoMenu = false
+      this.showOptionsMenu = false
       this.showPageMenu = !this.showPageMenu
     },
     clickShowInfoMenu() {
       this.showPageMenu = false
+      this.showOptionsMenu = false
       this.showInfoMenu = !this.showInfoMenu
+    },
+    clickShowOptionsMenu() {
+      this.showPageMenu = false
+      this.showInfoMenu = false
+      this.showOptionsMenu = !this.showOptionsMenu
+    },
+    setFitMode(value) {
+      this.fitMode = value
+      this.showOptionsMenu = false
+    },
+    setBackground(value) {
+      this.background = value
+      this.showOptionsMenu = false
     },
     updateProgress() {
       if (!this.keepProgress || !this.numPages || !this.libraryItemId) return
@@ -236,6 +305,7 @@ export default {
     clickOutside() {
       if (this.showPageMenu) this.showPageMenu = false
       if (this.showInfoMenu) this.showInfoMenu = false
+      if (this.showOptionsMenu) this.showOptionsMenu = false
     },
     next() {
       if (!this.canGoNext) return
@@ -311,10 +381,14 @@ export default {
         this.loadTimeout = null
       }
     },
-    handleImageLoad() {
+    handleImageLoad(event) {
       this.clearLoadTimeout()
       this.loading = false
       this.loadedFirstPage = true
+      const img = event?.target
+      if (img && img.naturalWidth) {
+        this.imageNaturalSize = { width: img.naturalWidth, height: img.naturalHeight }
+      }
     },
     async preloadPage(pageNumber) {
       if (!this.pageImageBaseUrl || pageNumber <= 0 || pageNumber > this.numPages) return
@@ -342,6 +416,13 @@ export default {
         left: event.deltaX,
         behavior: 'auto'
       })
+    },
+    wheelZoom(event) {
+      // In custom zoom mode the wheel adjusts the zoom; otherwise it scrolls the container
+      if (this.fitMode !== 'custom' || !this.mainImg) return
+      event.preventDefault()
+      const delta = event.deltaY < 0 ? 10 : -10
+      this.scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, this.scale + delta))
     }
   },
   mounted() {
@@ -349,12 +430,32 @@ export default {
     const nextButton = this.$refs.nextButton
     if (prevButton) prevButton.addEventListener('wheel', this.scroll, { passive: false })
     if (nextButton) nextButton.addEventListener('wheel', this.scroll, { passive: false })
+
+    const imageContainer = this.$refs.imageContainer
+    if (imageContainer) {
+      const updateSize = () => {
+        const rect = imageContainer.getBoundingClientRect()
+        this.containerSize = { width: rect.width, height: rect.height }
+      }
+      updateSize()
+      if (typeof ResizeObserver !== 'undefined') {
+        this.resizeObserver = new ResizeObserver(updateSize)
+        this.resizeObserver.observe(imageContainer)
+      } else {
+        window.addEventListener('resize', updateSize)
+        this.resizeObserver = { disconnect: () => window.removeEventListener('resize', updateSize) }
+      }
+      imageContainer.addEventListener('wheel', this.wheelZoom, { passive: false })
+    }
   },
   beforeDestroy() {
     const prevButton = this.$refs.prevButton
     const nextButton = this.$refs.nextButton
     if (prevButton) prevButton.removeEventListener('wheel', this.scroll, { passive: false })
     if (nextButton) nextButton.removeEventListener('wheel', this.scroll, { passive: false })
+    const imageContainer = this.$refs.imageContainer
+    if (imageContainer) imageContainer.removeEventListener('wheel', this.wheelZoom, { passive: false })
+    if (this.resizeObserver) this.resizeObserver.disconnect()
     this.clearPageImageUrls()
   }
 }
