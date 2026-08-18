@@ -20,7 +20,7 @@
     <div v-if="comicMetadata" class="absolute top-0 left-16 sm:left-20 bg-bg text-gray-100 border-b border-l border-r border-gray-400 hover:bg-black-200 cursor-pointer rounded-b-md w-10 h-9 flex items-center justify-center text-center z-20" @mousedown.prevent @click.stop.prevent="clickShowInfoMenu">
       <span class="material-symbols text-xl">more</span>
     </div>
-    <a v-if="pages && numPages" :href="mainImg" :download="pages[page - 1]" class="absolute top-0 bg-bg text-gray-100 border-b border-l border-r border-gray-400 hover:bg-black-200 cursor-pointer rounded-b-md w-10 h-9 flex items-center justify-center text-center z-20" :class="comicMetadata ? 'left-28 sm:left-32' : 'left-16 sm:left-20'">
+    <a v-if="pages && numPages" :href="mainImg" :download="currentPageName" class="absolute top-0 bg-bg text-gray-100 border-b border-l border-r border-gray-400 hover:bg-black-200 cursor-pointer rounded-b-md w-10 h-9 flex items-center justify-center text-center z-20" :class="comicMetadata ? 'left-28 sm:left-32' : 'left-16 sm:left-20'">
       <span class="material-symbols text-xl">download</span>
     </a>
 
@@ -45,7 +45,7 @@
       </div>
       <div ref="imageContainer" class="w-full h-full relative overflow-auto">
         <div class="h-full flex" :class="scale > 100 ? '' : 'justify-center'">
-          <img v-if="mainImg" :style="{ minWidth: scale + '%', width: scale + '%' }" :src="mainImg" class="object-contain m-auto" />
+          <img v-if="mainImg" :style="{ minWidth: scale + '%', width: scale + '%' }" :src="mainImg" class="object-contain m-auto" @load="handleImageLoad" />
         </div>
       </div>
       <div v-show="loading" class="w-full h-full absolute top-0 left-0 flex items-center justify-center z-10">
@@ -56,17 +56,9 @@
 </template>
 
 <script>
-import Path from 'path'
-import { Archive } from 'libarchive.js/main.js'
-import { CompressedFile } from 'libarchive.js/src/compressed-file'
-
 // This is % with respect to the screen width
 const MAX_SCALE = 400
 const MIN_SCALE = 10
-
-Archive.init({
-  workerUrl: '/libarchive/worker-bundle.js'
-})
 
 export default {
   props: {
@@ -81,8 +73,7 @@ export default {
   data() {
     return {
       loading: false,
-      pages: null,
-      filesObject: null,
+      pages: [],
       mainImg: null,
       page: 0,
       numPages: 0,
@@ -92,14 +83,19 @@ export default {
       loadTimeout: null,
       loadedFirstPage: false,
       comicMetadata: null,
-      scale: 80
+      scale: 80,
+      manifestRevision: null,
+      pageImageUrls: Object.create(null)
     }
   },
   watch: {
-    url: {
+    manifestUrl: {
       immediate: true,
-      handler() {
-        this.extract()
+      handler(newUrl) {
+        this.resetState()
+        if (newUrl) {
+          this.loadManifest()
+        }
       }
     }
   },
@@ -107,11 +103,16 @@ export default {
     libraryItemId() {
       return this.libraryItem?.id
     },
-    ebookUrl() {
-      if (this.fileId) {
-        return `/api/items/${this.libraryItemId}/ebook/${this.fileId}`
-      }
-      return `/api/items/${this.libraryItemId}/ebook`
+    ebookBaseUrl() {
+      if (!this.libraryItemId) return null
+      const baseUrl = `/api/items/${this.libraryItemId}/ebook`
+      return this.fileId ? `${baseUrl}/${this.fileId}` : baseUrl
+    },
+    manifestUrl() {
+      return this.ebookBaseUrl ? `${this.ebookBaseUrl}/pages` : null
+    },
+    pageImageBaseUrl() {
+      return this.ebookBaseUrl ? `${this.ebookBaseUrl}/pages` : null
     },
     comicMetadataKeys() {
       return this.comicMetadata ? Object.keys(this.comicMetadata) : []
@@ -128,20 +129,19 @@ export default {
     },
     savedPage() {
       if (!this.keepProgress) return 0
-
-      // Validate ebookLocation is a number
       if (!this.userMediaProgress?.ebookLocation || isNaN(this.userMediaProgress.ebookLocation)) return 0
       return Number(this.userMediaProgress.ebookLocation)
     },
     cleanedPageNames() {
       return (
-        this.pages?.map((p) => {
-          if (p.length > 50) {
-            let firstHalf = p.slice(0, 22)
-            let lastHalf = p.slice(p.length - 23)
+        this.pages?.map((page) => {
+          const name = page.displayName || page.name || page.path || ''
+          if (name.length > 50) {
+            const firstHalf = name.slice(0, 22)
+            const lastHalf = name.slice(name.length - 23)
             return `${firstHalf} ... ${lastHalf}`
           }
-          return p
+          return name
         }) || []
       )
     },
@@ -150,9 +150,68 @@ export default {
     },
     canScaleDown() {
       return this.scale > MIN_SCALE
+    },
+    currentPageName() {
+      return this.pages?.[this.page - 1]?.displayName || this.pages?.[this.page - 1]?.name || null
     }
   },
   methods: {
+    resetState() {
+      this.pages = []
+      this.mainImg = null
+      this.page = 0
+      this.numPages = 0
+      this.pageMenuWidth = 256
+      this.showPageMenu = false
+      this.showInfoMenu = false
+      this.loadedFirstPage = false
+      this.comicMetadata = null
+      this.manifestRevision = null
+      this.clearPageImageUrls()
+      this.clearLoadTimeout()
+      this.loading = false
+    },
+    async loadManifest() {
+      if (!this.manifestUrl) return
+      this.loading = true
+      try {
+        const manifest = await this.$axios.$get(this.manifestUrl, { progress: false })
+        this.pages = manifest.pages || []
+        this.numPages = manifest.pageCount || this.pages.length
+        this.manifestRevision = manifest.revision || null
+        this.comicMetadata = manifest.metadata || null
+        this.calculatePageMenuWidth()
+
+        if (this.numPages > 0) {
+          this.loading = false
+          const startPage = this.savedPage > 0 && this.savedPage <= this.numPages ? this.savedPage : 1
+          this.setPage(startPage)
+        } else {
+          this.loading = false
+          this.$toast.error('Unable to load pages from comic')
+        }
+      } catch (error) {
+        console.error('ComicReader.loadManifest failed:', error)
+        this.$toast.error('Failed to load comic pages')
+        this.loading = false
+      }
+    },
+    calculatePageMenuWidth() {
+      if (typeof document === 'undefined') return
+      const largestFilename = this.cleanedPageNames.slice().sort((a, b) => a.length - b.length).pop()
+      if (!largestFilename) return
+      const pEl = document.createElement('p')
+      pEl.innerText = largestFilename
+      pEl.style.fontSize = '0.875rem'
+      pEl.style.opacity = 0
+      pEl.style.position = 'absolute'
+      document.body.appendChild(pEl)
+      const textWidth = pEl.getBoundingClientRect()?.width
+      if (textWidth) {
+        this.pageMenuWidth = textWidth + (16 + 5 + 2 + 5)
+      }
+      pEl.remove()
+    },
     clickShowPageMenu() {
       this.showInfoMenu = false
       this.showPageMenu = !this.showPageMenu
@@ -162,16 +221,10 @@ export default {
       this.showInfoMenu = !this.showInfoMenu
     },
     updateProgress() {
-      if (!this.keepProgress) return
-
-      if (!this.numPages) {
-        console.error('Num pages not loaded')
-        return
-      }
+      if (!this.keepProgress || !this.numPages || !this.libraryItemId) return
       if (this.savedPage === this.page) {
         return
       }
-
       const payload = {
         ebookLocation: this.page,
         ebookProgress: Math.max(0, Math.min(1, (Number(this.page) - 1) / Number(this.numPages)))
@@ -192,156 +245,89 @@ export default {
       if (!this.canGoPrev) return
       this.setPage(this.page - 1)
     },
-    setPage(page) {
-      if (page <= 0 || page > this.numPages) {
-        return
-      }
+    setPage(pageNumber) {
+      if (pageNumber <= 0 || pageNumber > this.numPages) return
+      const selectedPage = this.pages?.[pageNumber - 1]
+      if (!selectedPage) return
       this.showPageMenu = false
       this.showInfoMenu = false
-      const filename = this.pages[page - 1]
-      this.page = page
+      this.page = pageNumber
       this.updateProgress()
-      return this.extractFile(filename)
+      this.displayPage(pageNumber)
+      this.preloadPage(pageNumber + 1)
+    },
+    displayPage(pageNumber) {
+      const cachedUrl = this.pageImageUrls[pageNumber]
+      if (cachedUrl) {
+        this.clearLoadTimeout()
+        this.loading = false
+        this.mainImg = cachedUrl
+        return
+      }
+      this.setLoadTimeout()
+      this.fetchPageImage(pageNumber)
+    },
+    buildPageImageUrl(pageNumber) {
+      if (!this.pageImageBaseUrl) return null
+      const versionQuery = this.manifestRevision ? `?v=${this.manifestRevision}` : ''
+      return `${this.pageImageBaseUrl}/${pageNumber}${versionQuery}`
+    },
+    async fetchPageImage(pageNumber) {
+      const url = this.buildPageImageUrl(pageNumber)
+      if (!url) return
+      try {
+        // Fetch through $axios so the Bearer token (and 401 refresh) are applied
+        const blob = await this.$axios.$get(url, { responseType: 'blob', progress: false })
+        const objectUrl = URL.createObjectURL(blob)
+        const previousUrl = this.pageImageUrls[pageNumber]
+        if (previousUrl) URL.revokeObjectURL(previousUrl)
+        this.pageImageUrls[pageNumber] = objectUrl
+        // Page changed while loading - keep the image for later, don't display it
+        if (this.page !== pageNumber) return
+        this.mainImg = objectUrl
+      } catch (error) {
+        console.error(`ComicReader failed to load page ${pageNumber}:`, error)
+        this.$toast.error('Failed to load page image')
+      } finally {
+        if (this.page === pageNumber) {
+          this.clearLoadTimeout()
+          this.loading = false
+        }
+      }
+    },
+    clearPageImageUrls() {
+      Object.values(this.pageImageUrls).forEach((url) => URL.revokeObjectURL(url))
+      this.pageImageUrls = Object.create(null)
     },
     setLoadTimeout() {
+      this.clearLoadTimeout()
       this.loadTimeout = setTimeout(() => {
         this.loading = true
       }, 150)
     },
-    extractFile(filename) {
-      return new Promise(async (resolve) => {
-        this.setLoadTimeout()
-        var file = await this.filesObject[filename].extract()
-        var reader = new FileReader()
-        reader.onload = (e) => {
-          this.mainImg = e.target.result
-          this.loading = false
-          resolve()
-        }
-        reader.onerror = (e) => {
-          console.error(e)
-          this.$toast.error('Read page file failed')
-          this.loading = false
-          resolve()
-        }
-        reader.readAsDataURL(file)
+    clearLoadTimeout() {
+      if (this.loadTimeout) {
         clearTimeout(this.loadTimeout)
-      })
-    },
-    async extract() {
-      this.loading = true
-      var buff = await this.$axios.$get(this.ebookUrl, {
-        responseType: 'blob'
-      })
-      const archive = await Archive.open(buff)
-      const originalFilesObject = await archive.getFilesObject()
-      // to support images in subfolders we need to flatten the object
-      //   ref: https://github.com/advplyr/audiobookshelf/issues/811
-      this.filesObject = this.flattenFilesObject(originalFilesObject)
-      console.log('Extracted files object', this.filesObject)
-      var filenames = Object.keys(this.filesObject)
-      this.parseFilenames(filenames)
-
-      var xmlFile = filenames.find((f) => (Path.extname(f) || '').toLowerCase() === '.xml')
-      if (xmlFile) await this.extractXmlFile(xmlFile)
-
-      this.numPages = this.pages.length
-
-      // Calculate page menu size
-      const largestFilename = this.cleanedPageNames
-        .map((p) => p)
-        .sort((a, b) => a.length - b.length)
-        .pop()
-      const pEl = document.createElement('p')
-      pEl.innerText = largestFilename
-      pEl.style.fontSize = '0.875rem'
-      pEl.style.opacity = 0
-      pEl.style.position = 'absolute'
-      document.body.appendChild(pEl)
-      const textWidth = pEl.getBoundingClientRect()?.width
-      if (textWidth) {
-        this.pageMenuWidth = textWidth + (16 + 5 + 2 + 5)
-      }
-      pEl.remove()
-
-      if (this.pages.length) {
-        this.loading = false
-
-        const startPage = this.savedPage > 0 && this.savedPage <= this.numPages ? this.savedPage : 1
-        await this.setPage(startPage)
-        this.loadedFirstPage = true
-      } else {
-        this.$toast.error('Unable to extract pages')
-        this.loading = false
+        this.loadTimeout = null
       }
     },
-    flattenFilesObject(filesObject) {
-      const flattenObject = (obj, prefix = '') => {
-        var _obj = {}
-        for (const key in obj) {
-          const newKey = prefix ? prefix + '/' + key : key
-          if (obj[key] instanceof CompressedFile) {
-            _obj[newKey] = obj[key]
-          } else if (!key.startsWith('_') && typeof obj[key] === 'object' && !Array.isArray(obj[key])) {
-            _obj = {
-              ..._obj,
-              ...flattenObject(obj[key], newKey)
-            }
-          } else {
-            _obj[newKey] = obj[key]
-          }
-        }
-        return _obj
-      }
-      return flattenObject(filesObject)
+    handleImageLoad() {
+      this.clearLoadTimeout()
+      this.loading = false
+      this.loadedFirstPage = true
     },
-    async extractXmlFile(filename) {
-      console.log('extracting xml filename', filename)
+    async preloadPage(pageNumber) {
+      if (!this.pageImageBaseUrl || pageNumber <= 0 || pageNumber > this.numPages) return
+      if (this.pageImageUrls[pageNumber]) return
+      const url = this.buildPageImageUrl(pageNumber)
+      if (!url) return
       try {
-        var file = await this.filesObject[filename].extract()
-        var reader = new FileReader()
-        reader.onload = (e) => {
-          this.comicMetadata = this.$xmlToJson(e.target.result)
-          console.log('Metadata', this.comicMetadata)
-        }
-        reader.onerror = (e) => {
-          console.error(e)
-        }
-        reader.readAsText(file)
+        const blob = await this.$axios.$get(url, { responseType: 'blob', progress: false })
+        if (this.pageImageUrls[pageNumber]) return
+        this.pageImageUrls[pageNumber] = URL.createObjectURL(blob)
       } catch (error) {
-        console.error(error)
+        console.error(`ComicReader failed to preload page ${pageNumber}:`, error)
       }
-    },
-    parseImageFilename(filename) {
-      var basename = Path.basename(filename, Path.extname(filename))
-      var numbersinpath = basename.match(/\d+/g)
-      if (!numbersinpath?.length) {
-        return {
-          index: -1,
-          filename
-        }
-      } else {
-        return {
-          index: Number(numbersinpath[numbersinpath.length - 1]),
-          filename
-        }
-      }
-    },
-    parseFilenames(filenames) {
-      const acceptableImages = ['.jpeg', '.jpg', '.png', '.webp']
-      var imageFiles = filenames.filter((f) => {
-        return acceptableImages.includes((Path.extname(f) || '').toLowerCase())
-      })
-      var imageFileObjs = imageFiles.map((img) => {
-        return this.parseImageFilename(img)
-      })
-
-      var imagesWithNum = imageFileObjs.filter((i) => i.index >= 0)
-      var orderedImages = imagesWithNum.sort((a, b) => a.index - b.index).map((i) => i.filename)
-      var noNumImages = imageFileObjs.filter((i) => i.index < 0)
-      orderedImages = orderedImages.concat(noNumImages.map((i) => i.filename))
-
-      this.pages = orderedImages
     },
     zoomIn() {
       this.scale += 10
@@ -351,7 +337,6 @@ export default {
     },
     scroll(event) {
       const imageContainer = this.$refs.imageContainer
-
       imageContainer.scrollBy({
         top: event.deltaY,
         left: event.deltaX,
@@ -362,16 +347,15 @@ export default {
   mounted() {
     const prevButton = this.$refs.prevButton
     const nextButton = this.$refs.nextButton
-
-    prevButton.addEventListener('wheel', this.scroll, { passive: false })
-    nextButton.addEventListener('wheel', this.scroll, { passive: false })
+    if (prevButton) prevButton.addEventListener('wheel', this.scroll, { passive: false })
+    if (nextButton) nextButton.addEventListener('wheel', this.scroll, { passive: false })
   },
   beforeDestroy() {
     const prevButton = this.$refs.prevButton
     const nextButton = this.$refs.nextButton
-
-    prevButton.removeEventListener('wheel', this.scroll, { passive: false })
-    nextButton.removeEventListener('wheel', this.scroll, { passive: false })
+    if (prevButton) prevButton.removeEventListener('wheel', this.scroll, { passive: false })
+    if (nextButton) nextButton.removeEventListener('wheel', this.scroll, { passive: false })
+    this.clearPageImageUrls()
   }
 }
 </script>
