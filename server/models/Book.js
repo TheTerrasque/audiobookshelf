@@ -1,3 +1,4 @@
+const Path = require('path')
 const { DataTypes, Model } = require('sequelize')
 const Logger = require('../Logger')
 const { getTitlePrefixAtEnd, getTitleIgnorePrefix } = require('../utils')
@@ -267,6 +268,17 @@ class Book extends Model {
 
   get hasAudioTracks() {
     return !!this.includedAudioFiles.length
+  }
+
+  /**
+   * Format of the primary ebook file. Falls back to deriving it from the file path for
+   * legacy records scanned before ebookFormat was stored (never self-healed by rescans).
+   */
+  get ebookFormat() {
+    if (!this.ebookFile) return null
+    if (this.ebookFile.ebookFormat) return this.ebookFile.ebookFormat
+    const ext = Path.extname(this.ebookFile.metadata?.path || '')
+    return ext ? ext.slice(1).toLowerCase() : null
   }
 
   /**
@@ -670,7 +682,7 @@ class Book extends Model {
       numChapters: this.chapters?.length || 0,
       duration: this.duration,
       size: this.size,
-      ebookFormat: this.ebookFile?.ebookFormat
+      ebookFormat: this.ebookFormat
     }
   }
 
