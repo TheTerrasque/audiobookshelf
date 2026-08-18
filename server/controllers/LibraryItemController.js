@@ -19,6 +19,7 @@ const RssFeedManager = require('../managers/RssFeedManager')
 const CacheManager = require('../managers/CacheManager')
 const CoverManager = require('../managers/CoverManager')
 const ShareManager = require('../managers/ShareManager')
+const ComicPageCacheManager = require('../managers/ComicPageCacheManager')
 
 /**
  * @typedef RequestUserObject
@@ -131,6 +132,14 @@ class LibraryItemController {
     }
 
     await this.handleDeleteLibraryItem(req.libraryItem.id, mediaItemIds, req.libraryItem.libraryId)
+
+    // Clear any cached comic pages/extractors for this item's files
+    for (const libraryFile of req.libraryItem.getLibraryFiles()) {
+      if (libraryFile.isEBookFile) {
+        ComicPageCacheManager.evictExtractorsForPath(libraryFile.metadata.path)
+      }
+    }
+
     if (hardDelete) {
       Logger.info(`[LibraryItemController] Deleting library item from file system at "${libraryItemPath}"`)
       await fs.remove(libraryItemPath).catch((error) => {
@@ -1146,6 +1155,113 @@ class LibraryItemController {
     } catch (error) {
       Logger.error(`[LibraryItemController] Failed to download ebook file "${ebookFilePath}"`, error)
       LibraryItemController.handleDownloadError(error, res)
+    }
+  }
+
+  /**
+   * Resolve the comic book (CBZ/CBR) file for the request
+   * fileid is the inode value stored in LibraryFile.ino or EBookFile.ino
+   * fileid is only required when reading a supplementary ebook
+   *
+   * @param {LibraryItemControllerRequest} req
+   * @returns {import('../objects/files/EBookFile')|null}
+   */
+  static _getComicEbookFile(req) {
+    let ebookFile = null
+    if (req.params.fileid) {
+      ebookFile = req.libraryItem.getLibraryFileWithIno(req.params.fileid)
+      if (!ebookFile?.isEBookFile) {
+        Logger.error(`[LibraryItemController] Invalid ebook file id "${req.params.fileid}"`)
+        return null
+      }
+    } else {
+      ebookFile = req.libraryItem.media.ebookFile
+    }
+
+    if (!ebookFile) {
+      Logger.error(`[LibraryItemController] No ebookFile for library item "${req.libraryItem.media.title}"`)
+      return null
+    }
+    const ebookFormat = (ebookFile.ebookFormat || '').toLowerCase()
+    if (ebookFormat !== 'cbz' && ebookFormat !== 'cbr') {
+      Logger.error(`[LibraryItemController] Ebook file "${ebookFile.metadata.filename}" is not a comic book (format: "${ebookFormat}")`)
+      return null
+    }
+    return ebookFile
+  }
+
+  /**
+   * GET api/items/:id/ebook/:fileid?/pages
+   * Returns the page manifest (page list + ComicInfo metadata) for a comic book ebook
+   *
+   * @param {LibraryItemControllerRequest} req
+   * @param {Response} res
+   */
+  async getEBookPages(req, res) {
+    const ebookFile = LibraryItemController._getComicEbookFile(req)
+    if (!ebookFile) {
+      return res.status(400).send('Ebook file is not a comic book (cbz/cbr)')
+    }
+    const ebookFilePath = ebookFile.metadata.path
+
+    if (!(await fs.pathExists(ebookFilePath))) {
+      Logger.error(`[LibraryItemController] Comic file "${ebookFilePath}" does not exist`)
+      return res.sendStatus(404)
+    }
+
+    try {
+      const manifest = await ComicPageCacheManager.getManifest(ebookFilePath)
+      if (!manifest.pageCount) {
+        Logger.error(`[LibraryItemController] No pages found in comic file "${ebookFilePath}"`)
+        return res.status(400).send('No pages found in comic book')
+      }
+      res.json(manifest)
+    } catch (error) {
+      Logger.error(`[LibraryItemController] Failed to get pages for comic file "${ebookFilePath}"`, error)
+      return res.sendStatus(500)
+    }
+  }
+
+  /**
+   * GET api/items/:id/ebook/:fileid?/pages/:page
+   * Returns the image for the given 1-based page index of a comic book ebook
+   *
+   * @param {LibraryItemControllerRequest} req
+   * @param {Response} res
+   */
+  async getEBookPageImage(req, res) {
+    const ebookFile = LibraryItemController._getComicEbookFile(req)
+    if (!ebookFile) {
+      return res.status(400).send('Ebook file is not a comic book (cbz/cbr)')
+    }
+    const ebookFilePath = ebookFile.metadata.path
+
+    const page = Number(req.params.page)
+    if (!Number.isInteger(page) || page < 1) {
+      Logger.error(`[LibraryItemController] Invalid page index "${req.params.page}"`)
+      return res.status(400).send('Invalid page index')
+    }
+
+    if (!(await fs.pathExists(ebookFilePath))) {
+      Logger.error(`[LibraryItemController] Comic file "${ebookFilePath}" does not exist`)
+      return res.sendStatus(404)
+    }
+
+    try {
+      const manifest = await ComicPageCacheManager.getManifest(ebookFilePath)
+      const pageEntry = manifest.pages[page - 1]
+      if (!pageEntry) {
+        Logger.error(`[LibraryItemController] Page "${page}" not found in comic file "${ebookFilePath}" (pageCount: ${manifest.pageCount})`)
+        return res.sendStatus(404)
+      }
+
+      const buffer = await ComicPageCacheManager.getPageImage(ebookFilePath, pageEntry.path, pageEntry.extension, manifest.revision)
+      res.setHeader('Cache-Control', 'private, no-cache')
+      res.type(pageEntry.mime)
+      return res.send(buffer)
+    } catch (error) {
+      Logger.error(`[LibraryItemController] Failed to get page "${req.params.page}" for comic file "${ebookFilePath}"`, error)
+      return res.sendStatus(500)
     }
   }
 

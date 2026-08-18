@@ -202,6 +202,90 @@ describe('LibraryItemController', () => {
     })
   })
 
+  describe('comic pages routes', () => {
+    const makeEbookFile = (format) => ({
+      ino: 123,
+      metadata: {
+        path: `/fake/${format}.cbz`,
+        filename: `${format}.cbz`,
+        format,
+        ext: `.${format}`,
+        size: 100
+      },
+      ebookFormat: format
+    })
+
+    // Note: bound to apiRouter like ApiRouter registers the handlers
+    it('getEBookPages returns 400 for a non-comic ebook', async () => {
+      const newBook = await Database.bookModel.create({
+        title: 'Epub Book',
+        audioFiles: [],
+        tags: [],
+        narrators: [],
+        genres: [],
+        chapters: [],
+        ebookFile: makeEbookFile('epub')
+      })
+      const newLibrary = await Database.libraryModel.create({ name: 'Test Library', mediaType: 'book' })
+      const newLibraryFolder = await Database.libraryFolderModel.create({ path: '/test', libraryId: newLibrary.id })
+      const newLibraryItem = await Database.libraryItemModel.create({ libraryFiles: [], mediaId: newBook.id, mediaType: 'book', libraryId: newLibrary.id, libraryFolderId: newLibraryFolder.id })
+
+      const libraryItem = await Database.libraryItemModel.getExpandedById(newLibraryItem.id)
+      const fakeReq = { params: {}, user: { username: 'test' }, libraryItem }
+      const fakeRes = { status: sinon.stub().returns({ send: sinon.spy() }), sendStatus: sinon.spy() }
+
+      await LibraryItemController.getEBookPages.bind(apiRouter)(fakeReq, fakeRes)
+
+      expect(fakeRes.status.calledWith(400)).to.be.true
+    })
+
+    it('getEBookPages returns 404 when the comic file does not exist', async () => {
+      const newBook = await Database.bookModel.create({
+        title: 'Comic Book',
+        audioFiles: [],
+        tags: [],
+        narrators: [],
+        genres: [],
+        chapters: [],
+        ebookFile: makeEbookFile('cbz')
+      })
+      const newLibrary = await Database.libraryModel.create({ name: 'Test Library', mediaType: 'book' })
+      const newLibraryFolder = await Database.libraryFolderModel.create({ path: '/test', libraryId: newLibrary.id })
+      const newLibraryItem = await Database.libraryItemModel.create({ libraryFiles: [], mediaId: newBook.id, mediaType: 'book', libraryId: newLibrary.id, libraryFolderId: newLibraryFolder.id })
+
+      const libraryItem = await Database.libraryItemModel.getExpandedById(newLibraryItem.id)
+      const fakeReq = { params: {}, user: { username: 'test' }, libraryItem }
+      const fakeRes = { status: sinon.stub().returns({ send: sinon.spy() }), sendStatus: sinon.spy() }
+
+      await LibraryItemController.getEBookPages.bind(apiRouter)(fakeReq, fakeRes)
+
+      expect(fakeRes.sendStatus.calledWith(404)).to.be.true
+    })
+
+    it('getEBookPageImage returns 400 for an invalid page index', async () => {
+      const newBook = await Database.bookModel.create({
+        title: 'Comic Book',
+        audioFiles: [],
+        tags: [],
+        narrators: [],
+        genres: [],
+        chapters: [],
+        ebookFile: makeEbookFile('cbz')
+      })
+      const newLibrary = await Database.libraryModel.create({ name: 'Test Library', mediaType: 'book' })
+      const newLibraryFolder = await Database.libraryFolderModel.create({ path: '/test', libraryId: newLibrary.id })
+      const newLibraryItem = await Database.libraryItemModel.create({ libraryFiles: [], mediaId: newBook.id, mediaType: 'book', libraryId: newLibrary.id, libraryFolderId: newLibraryFolder.id })
+
+      const libraryItem = await Database.libraryItemModel.getExpandedById(newLibraryItem.id)
+      const fakeReq = { params: { page: 'abc' }, user: { username: 'test' }, libraryItem }
+      const fakeRes = { status: sinon.stub().returns({ send: sinon.spy() }), sendStatus: sinon.spy() }
+
+      await LibraryItemController.getEBookPageImage.bind(apiRouter)(fakeReq, fakeRes)
+
+      expect(fakeRes.status.calledWith(400)).to.be.true
+    })
+  })
+
   describe('batch item access control', () => {
     let lib1Id
     let itemLib1Id
