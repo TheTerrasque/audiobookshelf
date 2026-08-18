@@ -177,6 +177,15 @@ export default {
       const file = this.comicFiles[this.currentFileIndex]
       return file?.metadata?.filename || null
     },
+    // Progress across the whole book (all sibling comic files), not just the file currently
+    // open - a book has one shared progress record, so weighing only by the current file's
+    // page count would reset progress to ~0 every time a later volume's first page is opened.
+    overallEbookProgress() {
+      const totalFiles = this.comicFiles.length || 1
+      const fileIndex = this.currentFileIndex >= 0 ? this.currentFileIndex : 0
+      const withinFileProgress = this.numPages ? (Number(this.page) - 1) / Number(this.numPages) : 0
+      return Math.max(0, Math.min(1, (fileIndex + withinFileProgress) / totalFiles))
+    },
     canGoNext() {
       return this.page < this.numPages || this.hasNextFile
     },
@@ -379,7 +388,7 @@ export default {
       }
       const payload = {
         ebookLocation: this.page,
-        ebookProgress: Math.max(0, Math.min(1, (Number(this.page) - 1) / Number(this.numPages))),
+        ebookProgress: this.overallEbookProgress,
         ebookFileIno: this.currentFileIno
       }
       this.$axios.$patch(`/api/me/progress/${this.libraryItemId}`, payload, { progress: false }).catch((error) => {
