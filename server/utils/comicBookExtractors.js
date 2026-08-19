@@ -7,6 +7,38 @@ const StreamZip = require('../libs/nodeStreamZip')
 const Archive = require('../libs/libarchive/archive')
 const { isWritable } = require('./fileUtils')
 
+/**
+ * Sanitize an archive entry name for use as a relative path under a target directory.
+ *
+ * Normalizes both `/` and `\` separators (RAR archives store entry names with
+ * either separator) and drops empty, `.` and `..` segments so the result can
+ * never escape the target directory (zip-slip protection). Legitimate
+ * subfolder entries are preserved.
+ *
+ * @param {string} name raw entry name as stored in the archive
+ * @returns {string} sanitized relative path, or empty string if no safe segments remain
+ */
+function sanitizeArchiveEntryName(name) {
+  const segments = String(name)
+    .split(/[\\/]+/)
+    .filter((segment) => segment !== '' && segment !== '.' && segment !== '..')
+  return segments.join(Path.sep)
+}
+
+/**
+ * Whether an archive entry name can safely be treated as a page file:
+ * it must sanitize to a non-empty path, must not contain `..` segments or
+ * control characters. (The filenameTransform passed to the extractor is a
+ * further backstop for anything that does get extracted.)
+ *
+ * @param {string} name raw entry name as stored in the archive
+ * @returns {boolean}
+ */
+function isSafeArchiveEntryName(name) {
+  const segments = String(name).split(/[\\/]+/)
+  return sanitizeArchiveEntryName(name) !== '' && !segments.includes('..') && !/[\u0000-\u001f]/.test(name)
+}
+
 class AbstractComicBookExtractor {
   constructor(comicPath) {
     this.comicPath = comicPath
@@ -57,7 +89,12 @@ class CbrComicBookExtractor extends AbstractComicBookExtractor {
     this.tmpDir = global.MetadataPath ? Path.join(global.MetadataPath, 'tmp') : os.tmpdir()
     await fs.ensureDir(this.tmpDir)
     if (!(await isWritable(this.tmpDir))) throw new Error(`[CbrComicBookExtractor] Temp directory "${this.tmpDir}" is not writable`)
-    this.archive = await unrar.createExtractorFromFile({ filepath: this.comicPath, targetPath: this.tmpDir })
+    this.archive = await unrar.createExtractorFromFile({
+      filepath: this.comicPath,
+      targetPath: this.tmpDir,
+      // Keep extracted files inside tmpDir even if entry names contain path traversal
+      filenameTransform: (name) => sanitizeArchiveEntryName(name) || 'unnamed'
+    })
     Logger.debug(`[CbrComicBookExtractor] Opened comic book "${this.comicPath}". Using temp directory "${this.tmpDir}" for extraction.`)
   }
 
@@ -65,13 +102,35 @@ class CbrComicBookExtractor extends AbstractComicBookExtractor {
     if (!this.archive) return null
     const list = this.archive.getFileList()
     const fileHeaders = [...list.fileHeaders]
-    const filePaths = fileHeaders.filter((fh) => !fh.flags.directory).map((fh) => fh.name)
+    const filePaths = fileHeaders
+      .filter((fh) => !fh.flags.directory)
+      .map((fh) => fh.name)
+      .filter((name) => isSafeArchiveEntryName(name))
     Logger.debug(`[CbrComicBookExtractor] Found ${filePaths.length} files in comic book "${this.comicPath}"`)
     return filePaths
   }
 
+  /**
+   * Absolute path of a file extracted by node-unrar-js under this.tmpDir.
+   *
+   * The entry name is sanitized with the same transform passed to the
+   * extractor, so the path is guaranteed to stay inside tmpDir; the
+   * containment check is defense in depth.
+   *
+   * @param {string} name raw entry name as reported by the archive
+   * @returns {string}
+   */
+  _getExtractedFilePath(name) {
+    const tmpDir = Path.resolve(this.tmpDir)
+    const fullPath = Path.resolve(tmpDir, sanitizeArchiveEntryName(name) || 'unnamed')
+    if (fullPath !== tmpDir && !fullPath.startsWith(tmpDir + Path.sep)) {
+      throw new Error(`[CbrComicBookExtractor] Refusing to access path outside temp directory "${tmpDir}": "${fullPath}"`)
+    }
+    return fullPath
+  }
+
   async removeEmptyParentDirs(file) {
-    let dir = Path.dirname(file)
+    let dir = Path.dirname(sanitizeArchiveEntryName(file) || 'unnamed')
     while (dir !== '.') {
       const fullDirPath = Path.join(this.tmpDir, dir)
       const files = await fs.readdir(fullDirPath)
@@ -85,7 +144,11 @@ class CbrComicBookExtractor extends AbstractComicBookExtractor {
     if (!this.archive) return null
     const extracted = this.archive.extract({ files: [file] })
     const files = [...extracted.files]
-    const filePath = Path.join(this.tmpDir, files[0].fileHeader.name)
+    if (!files.length) {
+      Logger.error(`[CbrComicBookExtractor] Failed to extract file "${file}" from comic book "${this.comicPath}"`)
+      return null
+    }
+    const filePath = this._getExtractedFilePath(files[0].fileHeader.name)
     const fileData = await fs.readFile(filePath)
     await fs.remove(filePath)
     await this.removeEmptyParentDirs(files[0].fileHeader.name)
@@ -97,7 +160,11 @@ class CbrComicBookExtractor extends AbstractComicBookExtractor {
     if (!this.archive) return false
     const extracted = this.archive.extract({ files: [file] })
     const files = [...extracted.files]
-    const extractedFilePath = Path.join(this.tmpDir, files[0].fileHeader.name)
+    if (!files.length) {
+      Logger.error(`[CbrComicBookExtractor] Failed to extract file "${file}" from comic book "${this.comicPath}"`)
+      return false
+    }
+    const extractedFilePath = this._getExtractedFilePath(files[0].fileHeader.name)
     await fs.move(extractedFilePath, outputFilePath, { overwrite: true })
     await this.removeEmptyParentDirs(files[0].fileHeader.name)
     Logger.debug(`[CbrComicBookExtractor] Extracted file "${file}" from comic book "${this.comicPath}" to "${outputFilePath}"`)
@@ -210,4 +277,7 @@ function createComicBookExtractor(comicPath) {
     throw new Error(`Unsupported comic book format "${ext}"`)
   }
 }
-module.exports = { createComicBookExtractor }
+module.exports = {
+  createComicBookExtractor,
+  sanitizeArchiveEntryName
+}
