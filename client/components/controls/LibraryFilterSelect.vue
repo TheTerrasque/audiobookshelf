@@ -227,6 +227,11 @@ export default {
           sublist: true
         },
         {
+          text: this.$strings.LabelFormat,
+          value: 'format',
+          sublist: true
+        },
+        {
           text: this.$strings.LabelAbridged,
           value: 'abridged',
           sublist: false
@@ -347,6 +352,9 @@ export default {
         } else if (parts[0] === 'ebooks') {
           const item = this.ebooks.find((e) => e.id == decoded)
           if (item) filterValue = item.name
+        } else if (parts[0] === 'format') {
+          const item = this.format.find((f) => f.id == decoded)
+          if (item) filterValue = item.name
         } else if (parts[0] === 'missing') {
           const item = this.missing.find((m) => m.id == decoded)
           if (item) filterValue = item.name
@@ -441,6 +449,22 @@ export default {
         {
           id: 'no-supplementary',
           name: this.$strings.LabelMissingSupplementaryEbook
+        }
+      ]
+    },
+    format() {
+      return [
+        {
+          id: 'audiobook',
+          name: this.$strings.LabelFormatAudiobook
+        },
+        {
+          id: 'ebook',
+          name: this.$strings.LabelFormatEbook
+        },
+        {
+          id: 'comic',
+          name: this.$strings.LabelFormatComic
         }
       ]
     },
