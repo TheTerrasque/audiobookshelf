@@ -217,6 +217,24 @@ module.exports = {
           [Sequelize.Op.eq]: null
         }
       }
+    } else if (group === 'format') {
+      // Exclusive categories by priority: audiobook (has audio) > comic (cbz/cbr ebook) > ebook (other ebook)
+      const hasAudio = `json_array_length(audioFiles) > 0`
+      const noAudio = `(audioFiles IS NULL OR json_array_length(audioFiles) = 0)`
+      const isComic = `(ebookFile IS NOT NULL AND (json_extract(ebookFile, '$.ebookFormat') IN ('cbz', 'cbr') OR json_extract(ebookFile, '$.metadata.ext') IN ('.cbz', '.cbr')))`
+      if (value === 'audiobook') {
+        mediaWhere = {
+          [Sequelize.Op.and]: [Sequelize.literal(hasAudio)]
+        }
+      } else if (value === 'comic') {
+        mediaWhere = {
+          [Sequelize.Op.and]: [Sequelize.literal(noAudio), Sequelize.literal(isComic)]
+        }
+      } else if (value === 'ebook') {
+        mediaWhere = {
+          [Sequelize.Op.and]: [Sequelize.literal(noAudio), { ebookFile: { [Sequelize.Op.not]: null } }, Sequelize.literal(`NOT (${isComic})`)]
+        }
+      }
     } else if (group === 'missing') {
       if (['asin', 'isbn', 'subtitle', 'publishedYear', 'description', 'publisher', 'language', 'cover'].includes(value)) {
         let key = value
