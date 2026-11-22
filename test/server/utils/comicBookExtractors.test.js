@@ -101,11 +101,53 @@ describe('comicBookExtractors', () => {
 
     it('should pass a filenameTransform that contains traversal inside the temp directory', async () => {
       const extractor = await openWithHeaders([header('001.png', Buffer.from('a'))])
-      expect(createOptions.targetPath).to.equal(Path.join(tmpDir, 'tmp'))
+      expect(Path.dirname(createOptions.targetPath)).to.equal(Path.join(tmpDir, 'tmp'))
+      expect(createOptions.targetPath).to.equal(extractor.tmpDir)
       expect(createOptions.filenameTransform('../../evil.png')).to.equal('evil.png')
       expect(createOptions.filenameTransform('a/../../b.png')).to.equal(Path.join('a', 'b.png'))
       expect(createOptions.filenameTransform('..')).to.equal('unnamed')
       extractor.close()
+    })
+
+    it('should give each open archive its own temp directory so same-named entries cannot collide', async () => {
+      const extractorA = await openWithHeaders([header('001.png', Buffer.from('from A'))])
+      const extractorB = await openWithHeaders([header('001.png', Buffer.from('from B'))])
+      expect(extractorA.tmpDir).to.not.equal(extractorB.tmpDir)
+
+      const [dataA, dataB] = await Promise.all([extractorA.extractToBuffer('001.png'), extractorB.extractToBuffer('001.png')])
+      expect(dataA.toString()).to.equal('from A')
+      expect(dataB.toString()).to.equal('from B')
+      extractorA.close()
+      extractorB.close()
+    })
+
+    it('should remove its temp directory on close', async () => {
+      const extractor = await openWithHeaders([header('001.png', Buffer.from('a'))])
+      const extractorTmpDir = extractor.tmpDir
+      expect(await fsExtra.pathExists(extractorTmpDir)).to.be.true
+      extractor.close()
+      // close() removes the directory asynchronously
+      for (let i = 0; i < 50 && (await fsExtra.pathExists(extractorTmpDir)); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      expect(await fsExtra.pathExists(extractorTmpDir)).to.be.false
+      expect(await fsExtra.pathExists(Path.join(tmpDir, 'tmp'))).to.be.true
+    })
+
+    it('should remove its temp directory when opening the archive fails', async () => {
+      createExtractorStub.rejects(new Error('bad rar'))
+      const extractor = createComicBookExtractor(cbrPath)
+      let error = null
+      try {
+        await extractor.open()
+      } catch (err) {
+        error = err
+      }
+      expect(error?.message).to.equal('bad rar')
+      for (let i = 0; i < 50 && (await fsExtra.readdir(Path.join(tmpDir, 'tmp'))).length; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      expect(await fsExtra.readdir(Path.join(tmpDir, 'tmp'))).to.deep.equal([])
     })
 
     it('should exclude traversal-only and control-character entry names from getFilePaths', async () => {

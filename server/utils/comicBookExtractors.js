@@ -86,15 +86,24 @@ class CbrComicBookExtractor extends AbstractComicBookExtractor {
   }
 
   async open() {
-    this.tmpDir = global.MetadataPath ? Path.join(global.MetadataPath, 'tmp') : os.tmpdir()
-    await fs.ensureDir(this.tmpDir)
-    if (!(await isWritable(this.tmpDir))) throw new Error(`[CbrComicBookExtractor] Temp directory "${this.tmpDir}" is not writable`)
-    this.archive = await unrar.createExtractorFromFile({
-      filepath: this.comicPath,
-      targetPath: this.tmpDir,
-      // Keep extracted files inside tmpDir even if entry names contain path traversal
-      filenameTransform: (name) => sanitizeArchiveEntryName(name) || 'unnamed'
-    })
+    const baseTmpDir = global.MetadataPath ? Path.join(global.MetadataPath, 'tmp') : os.tmpdir()
+    await fs.ensureDir(baseTmpDir)
+    if (!(await isWritable(baseTmpDir))) throw new Error(`[CbrComicBookExtractor] Temp directory "${baseTmpDir}" is not writable`)
+    // Each open archive extracts into its own directory so concurrent extractions of
+    // same-named entries (e.g. "001.jpg") from different archives can't overwrite or
+    // delete each other's files. The directory is removed again in close().
+    this.tmpDir = await fs.mkdtemp(Path.join(baseTmpDir, 'cbr-'))
+    try {
+      this.archive = await unrar.createExtractorFromFile({
+        filepath: this.comicPath,
+        targetPath: this.tmpDir,
+        // Keep extracted files inside tmpDir even if entry names contain path traversal
+        filenameTransform: (name) => sanitizeArchiveEntryName(name) || 'unnamed'
+      })
+    } catch (error) {
+      this.close()
+      throw error
+    }
     Logger.debug(`[CbrComicBookExtractor] Opened comic book "${this.comicPath}". Using temp directory "${this.tmpDir}" for extraction.`)
   }
 
@@ -172,6 +181,14 @@ class CbrComicBookExtractor extends AbstractComicBookExtractor {
   }
 
   close() {
+    const tmpDir = this.tmpDir
+    this.archive = null
+    this.tmpDir = null
+    if (tmpDir) {
+      fs.remove(tmpDir).catch((error) => {
+        Logger.error(`[CbrComicBookExtractor] Failed to remove temp directory "${tmpDir}"`, error)
+      })
+    }
     Logger.debug(`[CbrComicBookExtractor] Closed comic book "${this.comicPath}"`)
   }
 }
