@@ -4,9 +4,9 @@ const { expect } = chai
 
 const { DataTypes } = require('sequelize')
 
-const { up, down } = require('../../../server/migrations/v2.37.0-add-ebook-file-ino-to-media-progress')
+const { up, down } = require('../../../server/migrations/v2.38.1-add-ebook-file-ino-to-media-progress')
 
-describe('Migration v2.37.0-add-ebook-file-ino-to-media-progress', () => {
+describe('Migration v2.38.1-add-ebook-file-ino-to-media-progress', () => {
   let queryInterface, logger
 
   beforeEach(() => {
@@ -42,10 +42,10 @@ describe('Migration v2.37.0-add-ebook-file-ino-to-media-progress', () => {
         })
       ).to.be.true
 
-      expect(logger.info.calledWith('[2.37.0 migration] UPGRADE BEGIN: 2.37.0-add-ebook-file-ino-to-media-progress')).to.be.true
-      expect(logger.info.calledWith('[2.37.0 migration] Adding ebookFileIno column to mediaProgresses table')).to.be.true
-      expect(logger.info.calledWith('[2.37.0 migration] Added ebookFileIno column to mediaProgresses table')).to.be.true
-      expect(logger.info.calledWith('[2.37.0 migration] UPGRADE END: 2.37.0-add-ebook-file-ino-to-media-progress')).to.be.true
+      expect(logger.info.calledWith('[2.38.1 migration] UPGRADE BEGIN: 2.38.1-add-ebook-file-ino-to-media-progress')).to.be.true
+      expect(logger.info.calledWith('[2.38.1 migration] Adding ebookFileIno column to mediaProgresses table')).to.be.true
+      expect(logger.info.calledWith('[2.38.1 migration] Added ebookFileIno column to mediaProgresses table')).to.be.true
+      expect(logger.info.calledWith('[2.38.1 migration] UPGRADE END: 2.38.1-add-ebook-file-ino-to-media-progress')).to.be.true
     })
 
     it('should skip adding the column if it already exists', async () => {
@@ -54,7 +54,7 @@ describe('Migration v2.37.0-add-ebook-file-ino-to-media-progress', () => {
       await up({ context: { queryInterface, logger } })
 
       expect(queryInterface.addColumn.called).to.be.false
-      expect(logger.info.calledWith('[2.37.0 migration] ebookFileIno column already exists in mediaProgresses table')).to.be.true
+      expect(logger.info.calledWith('[2.38.1 migration] ebookFileIno column already exists in mediaProgresses table')).to.be.true
     })
 
     it('should skip if the mediaProgresses table does not exist', async () => {
@@ -63,7 +63,7 @@ describe('Migration v2.37.0-add-ebook-file-ino-to-media-progress', () => {
       await up({ context: { queryInterface, logger } })
 
       expect(queryInterface.addColumn.called).to.be.false
-      expect(logger.info.calledWith('[2.37.0 migration] mediaProgresses table does not exist')).to.be.true
+      expect(logger.info.calledWith('[2.38.1 migration] mediaProgresses table does not exist')).to.be.true
     })
   })
 
@@ -76,17 +76,17 @@ describe('Migration v2.37.0-add-ebook-file-ino-to-media-progress', () => {
       expect(queryInterface.removeColumn.calledOnce).to.be.true
       expect(queryInterface.removeColumn.calledWith('mediaProgresses', 'ebookFileIno')).to.be.true
 
-      expect(logger.info.calledWith('[2.37.0 migration] DOWNGRADE BEGIN: 2.37.0-add-ebook-file-ino-to-media-progress')).to.be.true
-      expect(logger.info.calledWith('[2.37.0 migration] Removing ebookFileIno column from mediaProgresses table')).to.be.true
-      expect(logger.info.calledWith('[2.37.0 migration] Removed ebookFileIno column from mediaProgresses table')).to.be.true
-      expect(logger.info.calledWith('[2.37.0 migration] DOWNGRADE END: 2.37.0-add-ebook-file-ino-to-media-progress')).to.be.true
+      expect(logger.info.calledWith('[2.38.1 migration] DOWNGRADE BEGIN: 2.38.1-add-ebook-file-ino-to-media-progress')).to.be.true
+      expect(logger.info.calledWith('[2.38.1 migration] Removing ebookFileIno column from mediaProgresses table')).to.be.true
+      expect(logger.info.calledWith('[2.38.1 migration] Removed ebookFileIno column from mediaProgresses table')).to.be.true
+      expect(logger.info.calledWith('[2.38.1 migration] DOWNGRADE END: 2.38.1-add-ebook-file-ino-to-media-progress')).to.be.true
     })
 
     it('should skip removing the column if it does not exist', async () => {
       await down({ context: { queryInterface, logger } })
 
       expect(queryInterface.removeColumn.called).to.be.false
-      expect(logger.info.calledWith('[2.37.0 migration] ebookFileIno column does not exist in mediaProgresses table')).to.be.true
+      expect(logger.info.calledWith('[2.38.1 migration] ebookFileIno column does not exist in mediaProgresses table')).to.be.true
     })
   })
 })

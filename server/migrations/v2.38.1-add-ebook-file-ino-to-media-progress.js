@@ -7,7 +7,7 @@
  * @property {MigrationContext} context - an object containing the migration context.
  */
 
-const migrationVersion = '2.37.0'
+const migrationVersion = '2.38.1'
 const migrationName = `${migrationVersion}-add-ebook-file-ino-to-media-progress`
 const loggerPrefix = `[${migrationVersion} migration]`
 
