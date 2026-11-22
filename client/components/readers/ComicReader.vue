@@ -283,9 +283,12 @@ export default {
     },
     async loadManifest() {
       if (!this.manifestUrl) return
+      const manifestUrl = this.manifestUrl
       this.loading = true
       try {
-        const manifest = await this.$axios.$get(this.manifestUrl, { progress: false })
+        const manifest = await this.$axios.$get(manifestUrl, { progress: false })
+        // The reader moved to another file while this manifest was loading
+        if (this.manifestUrl !== manifestUrl) return
         this.pages = manifest.pages || []
         this.numPages = manifest.pageCount || this.pages.length
         this.manifestRevision = manifest.revision || null
@@ -308,11 +311,13 @@ export default {
           this.$toast.error('Unable to load pages from comic')
         }
       } catch (error) {
+        if (this.manifestUrl !== manifestUrl) return
         console.error('ComicReader.loadManifest failed:', error)
         this.$toast.error('Failed to load comic pages')
         this.loading = false
       } finally {
-        this.pendingLandOn = null
+        // Leave pendingLandOn alone if a newer file switch owns it
+        if (this.manifestUrl === manifestUrl) this.pendingLandOn = null
       }
     },
     calculatePageMenuWidth() {
@@ -423,8 +428,18 @@ export default {
       this.currentFileIno = ino
     },
     isComicFile(libraryFile) {
-      const ext = (libraryFile?.metadata?.ext || '').toLowerCase()
+      // Fall back to the path for files scanned before metadata.ext was stored (matches the server)
+      let ext = (libraryFile?.metadata?.ext || '').toLowerCase()
+      if (!ext) {
+        const match = (libraryFile?.metadata?.path || '').toLowerCase().match(/\.[^./\\]+$/)
+        ext = match ? match[0] : ''
+      }
       return ext === '.cbz' || ext === '.cbr'
+    },
+    // Identifies the file + revision a page request belongs to, so responses that arrive after
+    // the reader switched files (or the file changed) are dropped instead of cached for the new file
+    pageRequestKey() {
+      return `${this.pageImageBaseUrl}|${this.manifestRevision}`
     },
     sameIno(a, b) {
       return a !== null && a !== undefined && b !== null && b !== undefined && String(a) === String(b)
@@ -470,9 +485,12 @@ export default {
     async fetchPageImage(pageNumber) {
       const url = this.buildPageImageUrl(pageNumber)
       if (!url) return
+      const requestKey = this.pageRequestKey()
+      const isStale = () => this.pageRequestKey() !== requestKey
       try {
         // Fetch through $axios so the Bearer token (and 401 refresh) are applied
         const blob = await this.$axios.$get(url, { responseType: 'blob', progress: false })
+        if (isStale()) return
         const objectUrl = URL.createObjectURL(blob)
         const previousUrl = this.pageImageUrls[pageNumber]
         if (previousUrl) URL.revokeObjectURL(previousUrl)
@@ -481,10 +499,11 @@ export default {
         if (this.page !== pageNumber) return
         this.mainImg = objectUrl
       } catch (error) {
+        if (isStale()) return
         console.error(`ComicReader failed to load page ${pageNumber}:`, error)
         this.$toast.error('Failed to load page image')
       } finally {
-        if (this.page === pageNumber) {
+        if (!isStale() && this.page === pageNumber) {
           this.clearLoadTimeout()
           this.loading = false
         }
@@ -520,8 +539,10 @@ export default {
       if (this.pageImageUrls[pageNumber]) return
       const url = this.buildPageImageUrl(pageNumber)
       if (!url) return
+      const requestKey = this.pageRequestKey()
       try {
         const blob = await this.$axios.$get(url, { responseType: 'blob', progress: false })
+        if (this.pageRequestKey() !== requestKey) return
         if (this.pageImageUrls[pageNumber]) return
         this.pageImageUrls[pageNumber] = URL.createObjectURL(blob)
       } catch (error) {
