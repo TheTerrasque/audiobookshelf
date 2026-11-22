@@ -23,13 +23,27 @@ const DEFAULT_PAGE_CACHE_MAX_BYTES = 64 * 1024 * 1024
 const DEFAULT_EXTRACTOR_POOL_MAX = 4
 
 /**
+ * @typedef PooledExtractor
+ * @property {string} path
+ * @property {string} revision
+ * @property {import('../utils/comicBookExtractors').AbstractComicBookExtractor|null} extractor set once opened
+ * @property {Promise<void>} opening resolves once the extractor is open (shared by concurrent callers)
+ * @property {number} users number of in-flight operations currently using the extractor
+ * @property {boolean} disposed removed from the pool; close as soon as no operation uses it
+ * @property {boolean} closed
+ */
+
+/**
  * Serves comic book (CBZ/CBR) pages as individual images.
  *
  * - Page images are extracted on demand and kept in an in-memory byte-based LRU cache
  * - Open archive handles are pooled (small LRU keyed by path + revision) so consecutive
- *   page requests reuse the same extractor instead of reopening the archive
+ *   page requests reuse the same extractor instead of reopening the archive.
+ *   Concurrent requests share a single open, and an extractor that is evicted from the pool
+ *   while a request is still reading from it is only closed once that request is done.
  * - A per-file manifest (page list + ComicInfo metadata) is cached in memory and
  *   invalidated when the file's mtime/size changes
+ * - Concurrent requests for the same manifest or page share one extraction
  */
 class ComicPageCacheManager {
   constructor() {
@@ -38,19 +52,21 @@ class ComicPageCacheManager {
 
     this.pageCache = new LRUCache({
       maxSize: pageCacheMaxBytes,
-      sizeCalculation: (value) => value?.length || 0
+      sizeCalculation: (value) => value?.length || 1
     })
     this.extractorPool = new LRUCache({
       max: extractorPoolMax,
       dispose: (entry) => {
-        try {
-          entry?.extractor?.close()
-        } catch (error) {
-          Logger.error(`[ComicPageCacheManager] Failed to close pooled extractor for "${entry?.path}"`, error)
-        }
+        entry.disposed = true
+        this._closeIfUnused(entry)
       }
     })
+    /** @type {Map<string, { statsKey: string, manifest: object }>} */
     this.manifestCache = new Map()
+    /** @type {Map<string, Promise<object>>} in-flight manifest builds keyed by path + statsKey */
+    this.pendingManifests = new Map()
+    /** @type {Map<string, Promise<Buffer>>} in-flight page extractions keyed like pageCache */
+    this.pendingPages = new Map()
   }
 
   /**
@@ -74,44 +90,61 @@ class ComicPageCacheManager {
       this.evictExtractorsForPath(ebookFilePath)
     }
 
+    const pendingKey = `${ebookFilePath}:${statsKey}`
+    let pending = this.pendingManifests.get(pendingKey)
+    if (!pending) {
+      pending = this._buildManifest(ebookFilePath, statsKey).finally(() => {
+        this.pendingManifests.delete(pendingKey)
+      })
+      this.pendingManifests.set(pendingKey, pending)
+    }
+    return pending
+  }
+
+  /**
+   * @param {string} ebookFilePath
+   * @param {string} statsKey
+   */
+  async _buildManifest(ebookFilePath, statsKey) {
     const revision = crypto.createHash('md5').update(statsKey).digest('hex')
-    const entry = await this._getExtractor(ebookFilePath, revision)
     try {
-      const filePaths = (await entry.extractor.getFilePaths()) || []
-      filePaths.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+      return await this._withExtractor(ebookFilePath, revision, async (extractor) => {
+        const filePaths = (await extractor.getFilePaths()) || []
+        filePaths.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
 
-      const pages = filePaths
-        .filter((filePath) => {
-          const ext = Path.extname(filePath).toLowerCase().slice(1)
-          return globals.SupportedImageTypes.includes(ext)
-        })
-        .map((filePath, index) => {
-          const extension = Path.extname(filePath).toLowerCase().slice(1)
-          const name = Path.basename(filePath)
-          return {
-            index: index + 1,
-            path: filePath,
-            name,
-            displayName: name,
-            extension,
-            mime: IMAGE_MIME_MAP[extension] || 'image/jpeg'
-          }
-        })
+        const pages = filePaths
+          .filter((filePath) => {
+            const ext = Path.extname(filePath).toLowerCase().slice(1)
+            return globals.SupportedImageTypes.includes(ext)
+          })
+          .map((filePath, index) => {
+            const extension = Path.extname(filePath).toLowerCase().slice(1)
+            const name = Path.basename(filePath)
+            return {
+              index: index + 1,
+              path: filePath,
+              name,
+              displayName: name,
+              extension,
+              mime: IMAGE_MIME_MAP[extension] || 'image/jpeg'
+            }
+          })
 
-      const manifest = {
-        pageCount: pages.length,
-        pages,
-        metadata: null,
-        revision
-      }
+        const manifest = {
+          pageCount: pages.length,
+          pages,
+          metadata: null,
+          revision
+        }
 
-      const comicInfoPath = filePaths.find((filePath) => filePath.toLowerCase() === 'comicinfo.xml')
-      if (comicInfoPath) {
-        manifest.metadata = await this._parseComicInfo(entry.extractor, comicInfoPath)
-      }
+        const comicInfoPath = filePaths.find((filePath) => filePath.toLowerCase() === 'comicinfo.xml')
+        if (comicInfoPath) {
+          manifest.metadata = await this._parseComicInfo(extractor, comicInfoPath)
+        }
 
-      this.manifestCache.set(ebookFilePath, { statsKey, manifest })
-      return manifest
+        this.manifestCache.set(ebookFilePath, { statsKey, manifest })
+        return manifest
+      })
     } catch (error) {
       Logger.error(`[ComicPageCacheManager] Failed to build manifest for "${ebookFilePath}"`, error)
       this.evictExtractorsForPath(ebookFilePath)
@@ -133,9 +166,19 @@ class ComicPageCacheManager {
     const cached = this.pageCache.get(cacheKey)
     if (cached) return cached
 
-    const entry = await this._getExtractor(ebookFilePath, revision)
+    let pending = this.pendingPages.get(cacheKey)
+    if (!pending) {
+      pending = this._extractPage(ebookFilePath, pagePath, extension, revision, cacheKey).finally(() => {
+        this.pendingPages.delete(cacheKey)
+      })
+      this.pendingPages.set(cacheKey, pending)
+    }
+    return pending
+  }
+
+  async _extractPage(ebookFilePath, pagePath, extension, revision, cacheKey) {
     try {
-      const buffer = await entry.extractor.extractToBuffer(pagePath)
+      const buffer = await this._withExtractor(ebookFilePath, revision, (extractor) => extractor.extractToBuffer(pagePath))
       if (!buffer) {
         throw new Error(`Failed to extract page "${pagePath}" from "${ebookFilePath}"`)
       }
@@ -150,7 +193,9 @@ class ComicPageCacheManager {
   }
 
   /**
-   * Remove all cached manifests, page images and open extractors for a file path
+   * Close and remove all pooled extractors for a file path (any revision).
+   * Extractors still in use by an in-flight request are closed once that request finishes.
+   *
    * @param {string} ebookFilePath
    */
   evictExtractorsForPath(ebookFilePath) {
@@ -163,6 +208,23 @@ class ComicPageCacheManager {
   }
 
   /**
+   * Remove everything cached for a file path: its manifest, cached page images and open extractors.
+   * Used when the file's library item is deleted.
+   *
+   * @param {string} ebookFilePath
+   */
+  evictPath(ebookFilePath) {
+    const prefix = `${ebookFilePath}:`
+    this.manifestCache.delete(ebookFilePath)
+    for (const key of [...this.pageCache.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.pageCache.delete(key)
+      }
+    }
+    this.evictExtractorsForPath(ebookFilePath)
+  }
+
+  /**
    * Clear all caches and close all pooled extractors
    */
   clear() {
@@ -172,21 +234,86 @@ class ComicPageCacheManager {
   }
 
   /**
-   * Get a pooled (open) extractor for the given file revision, opening one if needed
+   * Run an operation with a pooled (open) extractor for the given file revision.
+   * The extractor is guaranteed not to be closed until the operation settles.
+   *
+   * @template T
    * @param {string} ebookFilePath
    * @param {string} revision
-   * @returns {Promise<{ extractor: import('../utils/comicBookExtractors').AbstractComicBookExtractor }>}
+   * @param {(extractor: import('../utils/comicBookExtractors').AbstractComicBookExtractor) => Promise<T>} operation
+   * @returns {Promise<T>}
    */
-  async _getExtractor(ebookFilePath, revision) {
-    const poolKey = `${ebookFilePath}:${revision}`
-    const pooled = this.extractorPool.get(poolKey)
-    if (pooled) return pooled
+  async _withExtractor(ebookFilePath, revision, operation) {
+    const entry = await this._acquireExtractor(ebookFilePath, revision)
+    try {
+      return await operation(/** @type {any} */ (entry.extractor))
+    } finally {
+      entry.users--
+      this._closeIfUnused(entry)
+    }
+  }
 
-    const extractor = createComicBookExtractor(ebookFilePath)
-    await extractor.open()
-    const entry = { path: ebookFilePath, revision, extractor }
-    this.extractorPool.set(poolKey, entry)
+  /**
+   * Get a pooled extractor for the given file revision, opening one if needed, and mark it in use.
+   * Concurrent callers for the same file revision share a single open.
+   * Callers must decrement `users` (see _withExtractor) when done.
+   *
+   * @param {string} ebookFilePath
+   * @param {string} revision
+   * @returns {Promise<PooledExtractor>}
+   */
+  async _acquireExtractor(ebookFilePath, revision) {
+    const poolKey = `${ebookFilePath}:${revision}`
+    let entry = this.extractorPool.get(poolKey)
+    if (!entry) {
+      /** @type {PooledExtractor} */
+      const newEntry = {
+        path: ebookFilePath,
+        revision,
+        extractor: null,
+        opening: Promise.resolve(),
+        users: 0,
+        disposed: false,
+        closed: false
+      }
+      newEntry.opening = (async () => {
+        const extractor = createComicBookExtractor(ebookFilePath)
+        await extractor.open()
+        newEntry.extractor = extractor
+      })()
+      entry = newEntry
+      this.extractorPool.set(poolKey, entry)
+    }
+
+    // Count as a user before waiting so that a dispose during the open can't close it under us
+    entry.users++
+    try {
+      await entry.opening
+    } catch (error) {
+      entry.users--
+      if (this.extractorPool.peek(poolKey) === entry) {
+        this.extractorPool.delete(poolKey)
+      }
+      throw error
+    }
     return entry
+  }
+
+  /**
+   * Close a pooled extractor once it has been removed from the pool and no operation uses it
+   * @param {PooledExtractor} entry
+   */
+  _closeIfUnused(entry) {
+    if (!entry.disposed || entry.users > 0 || entry.closed) return
+    entry.closed = true
+    entry.opening
+      .then(() => entry.extractor?.close())
+      .catch((error) => {
+        // An extractor that failed to open has nothing to close
+        if (entry.extractor) {
+          Logger.error(`[ComicPageCacheManager] Failed to close pooled extractor for "${entry.path}"`, error)
+        }
+      })
   }
 
   /**

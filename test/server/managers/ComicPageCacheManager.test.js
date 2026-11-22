@@ -146,4 +146,121 @@ describe('ComicPageCacheManager', () => {
       expect(rejected).to.be.true
     })
   })
+
+  describe('concurrency', () => {
+    const comicBookExtractors = require('../../../server/utils/comicBookExtractors')
+
+    /**
+     * Wrap createComicBookExtractor so tests can count opens/closes and delay extraction
+     */
+    const instrumentExtractors = (sinon, { extractDelayMs = 0 } = {}) => {
+      const stats = { opens: 0, closes: 0, closedWhileExtracting: 0 }
+      const original = comicBookExtractors.createComicBookExtractor
+      sinon.stub(comicBookExtractors, 'createComicBookExtractor').callsFake((path) => {
+        const extractor = original(path)
+        let extracting = 0
+        let closed = false
+        const origOpen = extractor.open.bind(extractor)
+        const origExtract = extractor.extractToBuffer.bind(extractor)
+        const origClose = extractor.close.bind(extractor)
+        extractor.open = async () => {
+          stats.opens++
+          await new Promise((resolve) => setTimeout(resolve, 5))
+          return origOpen()
+        }
+        extractor.extractToBuffer = async (file) => {
+          extracting++
+          try {
+            await new Promise((resolve) => setTimeout(resolve, extractDelayMs))
+            if (closed) throw new Error('extractor closed during extraction')
+            return await origExtract(file)
+          } finally {
+            extracting--
+          }
+        }
+        extractor.close = () => {
+          stats.closes++
+          if (extracting > 0) stats.closedWhileExtracting++
+          closed = true
+          return origClose()
+        }
+        return extractor
+      })
+      return stats
+    }
+
+    let sinon
+    beforeEach(() => {
+      sinon = require('sinon').createSandbox()
+    })
+    afterEach(() => {
+      sinon.restore()
+    })
+
+    // ComicPageCacheManager captured createComicBookExtractor at require time, so load a fresh
+    // instance after stubbing
+    const freshManager = () => {
+      const modulePath = require.resolve('../../../server/managers/ComicPageCacheManager')
+      delete require.cache[modulePath]
+      const manager = require(modulePath)
+      delete require.cache[modulePath]
+      return manager
+    }
+
+    it('should open the archive only once for concurrent requests', async () => {
+      await createCbz(cbzPath, { '01.png': PNG_1x1, '02.png': PNG_1x1 })
+      const stats = instrumentExtractors(sinon)
+      const manager = freshManager()
+
+      const [m1, m2] = await Promise.all([manager.getManifest(cbzPath), manager.getManifest(cbzPath)])
+      expect(m1).to.equal(m2)
+      const buffers = await Promise.all([1, 2, 1, 2].map((p) => manager.getPageImage(cbzPath, m1.pages[p - 1].path, 'png', m1.revision)))
+      expect(buffers.every((b) => b.equals(PNG_1x1))).to.be.true
+      expect(stats.opens).to.equal(1)
+      manager.clear()
+    })
+
+    it('should not close an extractor evicted from the pool while it is still extracting', async () => {
+      const otherCbzPath = Path.join(tmpDir, 'other.cbz')
+      await createCbz(cbzPath, { '01.png': PNG_1x1 })
+      await createCbz(otherCbzPath, { '01.png': PNG_1x1 })
+      process.env.COMIC_EXTRACTOR_POOL_MAX = '1'
+      let manager
+      try {
+        const stats = instrumentExtractors(sinon, { extractDelayMs: 30 })
+        manager = freshManager()
+        const manifest = await manager.getManifest(cbzPath)
+        const otherManifest = await manager.getManifest(otherCbzPath)
+        manager.pageCache.clear()
+
+        // Start a slow page extraction on the first file, then evict its extractor by using the second file
+        const slowPage = manager.getPageImage(cbzPath, manifest.pages[0].path, 'png', manifest.revision)
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        await manager.getPageImage(otherCbzPath, otherManifest.pages[0].path, 'png', otherManifest.revision)
+
+        expect((await slowPage).equals(PNG_1x1)).to.be.true
+        expect(stats.closedWhileExtracting).to.equal(0)
+        expect(stats.closes).to.be.greaterThan(0)
+      } finally {
+        delete process.env.COMIC_EXTRACTOR_POOL_MAX
+        manager?.clear()
+      }
+    })
+
+    it('evictPath should drop the manifest, cached pages and extractors for a file', async () => {
+      await createCbz(cbzPath, { '01.png': PNG_1x1 })
+      const manager = freshManager()
+      const manifest = await manager.getManifest(cbzPath)
+      await manager.getPageImage(cbzPath, manifest.pages[0].path, 'png', manifest.revision)
+      expect(manager.manifestCache.size).to.equal(1)
+      expect(manager.pageCache.size).to.equal(1)
+      expect(manager.extractorPool.size).to.equal(1)
+
+      manager.evictPath(cbzPath)
+
+      expect(manager.manifestCache.size).to.equal(0)
+      expect(manager.pageCache.size).to.equal(0)
+      expect(manager.extractorPool.size).to.equal(0)
+    })
+  })
 })
