@@ -357,6 +357,17 @@ describe('LibraryItemController', () => {
       expect(fakeRes.sendStatus.calledWith(400)).to.be.true
     })
 
+    it('returns 400 when orderedFileData contains a duplicate ino', async () => {
+      const libraryItem = await createBookWithFiles([makeLibraryFile('1', 'vol1.cbz'), makeLibraryFile('2', 'vol2.cbz')])
+      const fakeReq = { body: { orderedFileData: [{ ino: '1' }, { ino: '1' }, { ino: '2' }] }, libraryItem }
+      const fakeRes = { json: sinon.spy(), sendStatus: sinon.spy() }
+
+      await LibraryItemController.updateEbookFiles.bind(apiRouter)(fakeReq, fakeRes)
+
+      expect(fakeRes.sendStatus.calledWith(400)).to.be.true
+      expect(libraryItem.libraryFiles.map((lf) => lf.ino)).to.deep.equal(['1', '2'])
+    })
+
     it('returns 400 when orderedFileData does not include every ebook file', async () => {
       const libraryItem = await createBookWithFiles([makeLibraryFile('1', 'vol1.cbz'), makeLibraryFile('2', 'vol2.cbz')])
       const fakeReq = { body: { orderedFileData: [{ ino: '1' }] }, libraryItem }

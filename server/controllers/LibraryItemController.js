@@ -136,7 +136,7 @@ class LibraryItemController {
     // Clear any cached comic pages/extractors for this item's files
     for (const libraryFile of req.libraryItem.getLibraryFiles()) {
       if (libraryFile.isEBookFile) {
-        ComicPageCacheManager.evictExtractorsForPath(libraryFile.metadata.path)
+        ComicPageCacheManager.evictPath(libraryFile.metadata.path)
       }
     }
 
@@ -1363,8 +1363,9 @@ class LibraryItemController {
       return res.sendStatus(400)
     }
     // Ensure the ordered list contains each ebook file exactly once
+    // (the length check rejects duplicates, which would otherwise pass the set-size check)
     const orderedInos = new Set(orderedFileData.map((fileData) => fileData.ino))
-    if (orderedInos.size !== ebookInos.size) {
+    if (orderedFileData.length !== ebookInos.size || orderedInos.size !== ebookInos.size) {
       Logger.error(`[LibraryItemController] updateEbookFiles orderedFileData does not match the ebook files ${req.libraryItem.id}`)
       return res.sendStatus(400)
     }
