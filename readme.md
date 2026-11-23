@@ -14,6 +14,27 @@
 
 ## ⚠️ Frontend pull requests are not being reviewed or merged for the existing Vue frontend. The frontend is currently being rewritten and migrated to React and should be available soon.
 
+# About this fork
+
+> [!NOTE]
+> **This is an unofficial fork** of [advplyr/audiobookshelf](https://github.com/advplyr/audiobookshelf), focused on comic (CBZ/CBR) handling. It's not affiliated with or supported by the Audiobookshelf project. It is rebased on upstream regularly; currently v2.38.1 on top of upstream v2.38.0.
+>
+> **What's different** (branch `feat/comic-file-nav`):
+>
+> - **Server-side comic pages.** New endpoints `GET /api/items/:id/ebook/:fileid?/pages` (page list + ComicInfo.xml metadata) and `GET /api/items/:id/ebook/:fileid?/pages/:page` (a single page image). The web reader fetches pages one by one instead of downloading and unpacking the whole archive in the browser.
+>   - Pages are cached in memory: an LRU cache sized in bytes (`COMIC_PAGE_CACHE_MAX_BYTES`, default 64 MB), plus a pool of open archives (`COMIC_EXTRACTOR_POOL_MAX`, default 4).
+>   - CBZ files are streamed. CBR files are unpacked into a temp directory per archive, protected against zip-slip (entries escaping the directory).
+> - **Comic reader improvements.** Fit modes (fit to screen, fit to width, custom zoom), background colour, mouse-wheel zoom, scroll to top on page change, and a redesigned top bar.
+> - **Multi-file comics.** Books with several comic files can be read straight through: next/previous page crosses files, and a file list lets you jump between them.
+>   - The order of the files can be changed (`PATCH /api/items/:id/ebook`).
+>   - Reading progress remembers which file you were in (`mediaProgresses.ebookFileIno`, added by migration `v2.38.1`).
+> - **Format filter** in the library view (audiobook / ebook / comic).
+> - **Legacy fix.** Older records with an empty `ebookFormat` fall back to the file extension, so they still open as comics.
+>
+> The matching Android app fork, which reads comics through the same page API, is at [TheTerrasque/audiobookshelf-app](https://github.com/TheTerrasque/audiobookshelf-app).
+>
+> The database migration only adds a column, but this is still a one-way step: going back to official releases is untested.
+
 # About
 
 Audiobookshelf is a self-hosted audiobook and podcast server.
