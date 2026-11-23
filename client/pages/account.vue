@@ -113,11 +113,13 @@
       </div>
 
       <div class="py-4 mt-8 flex flex-wrap gap-2">
+        <ui-btn color="bg-primary flex items-center text-lg" @click="showQuickConnectModal = true"><span class="material-symbols mr-4 icon-text">qr_code_2</span>{{ $strings.ButtonConnectMobileApp }}</ui-btn>
         <ui-btn v-if="!isGuest" color="bg-primary flex items-center text-lg" :disabled="loggingOut" @click="logout(true)"> <span class="material-symbols mr-4 icon-text">devices</span>{{ $strings.ButtonLogoutAllDevices }} </ui-btn>
         <ui-btn color="bg-primary flex items-center text-lg" :disabled="loggingOut" @click="logout(false)"><span class="material-symbols mr-4 icon-text">logout</span>{{ $strings.ButtonLogout }}</ui-btn>
       </div>
 
       <modals-emails-user-e-reader-device-modal v-model="showEReaderDeviceModal" :existing-devices="revisedEreaderDevices" :ereader-device="selectedEReaderDevice" @update="ereaderDevicesUpdated" />
+      <modals-quick-connect-modal v-model="showQuickConnectModal" />
     </div>
   </div>
 </template>
@@ -146,7 +148,8 @@ export default {
       ereaderDevices: [],
       deletingDeviceName: null,
       selectedEReaderDevice: null,
-      showEReaderDeviceModal: false
+      showEReaderDeviceModal: false,
+      showQuickConnectModal: false
     }
   },
   computed: {
