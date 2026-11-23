@@ -17,9 +17,9 @@
 # About this fork
 
 > [!NOTE]
-> **This is an unofficial fork** of [advplyr/audiobookshelf](https://github.com/advplyr/audiobookshelf), focused on comic (CBZ/CBR) handling. It's not affiliated with or supported by the Audiobookshelf project. It is rebased on upstream regularly; currently v2.38.1 on top of upstream v2.38.0.
+> **This is an unofficial fork** of [advplyr/audiobookshelf](https://github.com/advplyr/audiobookshelf), focused on comic (CBZ/CBR) handling. It's not affiliated with or supported by the Audiobookshelf project. It is rebased on upstream regularly; currently v2.38.2 on top of upstream v2.38.0.
 >
-> **What's different** (branch `feat/comic-file-nav`):
+> **What's different** (latest work is on branch `feat/media-versions`, which builds on `feat/comic-file-nav`):
 >
 > - **Server-side comic pages.** New endpoints `GET /api/items/:id/ebook/:fileid?/pages` (page list + ComicInfo.xml metadata) and `GET /api/items/:id/ebook/:fileid?/pages/:page` (a single page image). The web reader fetches pages one by one instead of downloading and unpacking the whole archive in the browser.
 >   - Pages are cached in memory: an LRU cache sized in bytes (`COMIC_PAGE_CACHE_MAX_BYTES`, default 64 MB), plus a pool of open archives (`COMIC_EXTRACTOR_POOL_MAX`, default 4).
@@ -33,13 +33,79 @@
 > - **File versions** (branch `feat/media-versions`). The M4B encoder and "embed metadata" no longer touch library files, so library folders can be mounted read-only.
 >   - Their output is saved as a new *version* under `VERSIONS_PATH`, which mirrors the library layout, e.g. `/versions/<library>/<author>/<book>/<version name>/`. Each version folder has a `version.json`.
 >   - Each user picks which version they play on the item page; streaming, transcoding, downloads and the mobile app all follow that choice.
->   - Set `VERSIONS_PATH=/versions` and mount a writable volume there; without it, versions go to `<METADATA_PATH>/versions`.
+>   - Set `VERSIONS_PATH=/versions` and mount a writable volume there; without it, versions go to `<METADATA_PATH>/versions`. See [Hosting the version store](#hosting-the-version-store).
 >   - The M4B encoder has optional audio processing: loudness normalization (EBU R128, adjustable target/true peak/range), dynamic range compression, voice clarity EQ, noise reduction, and a pitch-preserving speed change.
 >   - A sped-up version has its own timeline. Progress and bookmarks are stored on the original timeline and the server converts positions for whichever version a user has selected (including offline sessions from a downloaded copy), so switching versions keeps your place.
+>   - Admins can rename and delete versions from the item page (`GET/PATCH/DELETE /api/items/:id/versions[/:versionId]`, `PATCH /api/me/item/:id/version`). Added by migration `v2.38.2-add-media-versions`.
+> - **Quick connect for the mobile app.** **Account → Connect Mobile App** shows a QR code. Scanning it with a phone opens the app fork with the server address and your username filled in; you still log in as usual. The code is an `audiobookshelf://connect?address=…&username=…` link with no credentials in it. The address defaults to the one in your browser and can be edited (for example when you're browsing on `localhost`); the edit is remembered per browser.
+> - **Docker images on GHCR.** Every push builds `ghcr.io/theterrasque/audiobookshelf` for amd64 and arm64. See [Running the fork with Docker](#running-the-fork-with-docker).
 >
-> The matching Android app fork, which reads comics through the same page API, is at [TheTerrasque/audiobookshelf-app](https://github.com/TheTerrasque/audiobookshelf-app).
+> The matching mobile app fork, which reads comics through the same page API, has the audio version picker and scans the quick connect QR codes, is at [TheTerrasque/audiobookshelf-app](https://github.com/TheTerrasque/audiobookshelf-app).
 >
-> The database migrations only add a column and a table, but this is still a one-way step: going back to official releases is untested.
+> The database migrations only add columns and a table, but this is still a one-way step: going back to official releases is untested.
+
+## Running the fork with Docker
+
+Images are built by [`docker-build-fork.yml`](.github/workflows/docker-build-fork.yml) on every push and published to GitHub Container Registry:
+
+| Tag | What it is |
+|---|---|
+| `ghcr.io/theterrasque/audiobookshelf:<branch>` | Latest build of a branch, with `/` replaced by `-`, e.g. `:feat-media-versions` |
+| `ghcr.io/theterrasque/audiobookshelf:sha-<commit>` | A specific commit, e.g. `:sha-92f5ef3` |
+| `ghcr.io/theterrasque/audiobookshelf:latest` | Latest build of the repository's default branch |
+
+Use it in place of the official image in the example [`docker-compose.yml`](docker-compose.yml). Everything else (ports, `/config`, `/metadata`, library mounts) works as in upstream.
+
+```yaml
+services:
+  audiobookshelf:
+    image: ghcr.io/theterrasque/audiobookshelf:feat-media-versions
+    ports:
+      - 13378:80
+    volumes:
+      - ./audiobooks:/audiobooks:ro # library folders can be read-only
+      - ./podcasts:/podcasts
+      - ./metadata:/metadata
+      - ./config:/config
+      - ./versions:/versions # file versions (re-encodes, embedded metadata)
+    environment:
+      - VERSIONS_PATH=/versions
+    restart: unless-stopped
+```
+
+To build it yourself: `docker build -t audiobookshelf-fork .`
+
+## Hosting the version store
+
+The M4B encoder and "embed metadata" tools never write into library folders. Each run creates a *version* in the version store instead, so the library can be mounted read-only and the originals are always kept.
+
+**Where it lives.** The store is the directory in `VERSIONS_PATH`. If that isn't set it's `<METADATA_PATH>/versions` (`/metadata/versions` in Docker), which works but mixes large audio files into the metadata folder. A separate volume is recommended:
+
+```yaml
+    volumes:
+      - /srv/abs-versions:/versions
+    environment:
+      - VERSIONS_PATH=/versions
+```
+
+Outside Docker, set the `VERSIONS_PATH` environment variable or pass `--versions <path>`.
+
+**Layout.** The store mirrors your libraries, one folder per version:
+
+```
+/versions/<library name>/<item path inside the library folder>/<version label>/
+    <audio files>
+    version.json   # label, tool and its settings, item path and title, duration, chapters, files
+```
+
+**Things to know when hosting it:**
+
+- **Space.** A version is a full copy of the audio (an M4B re-encode is about the size of the original at the chosen bitrate), so size the volume like a second library for the books you convert. The M4B encoder first writes to the item cache under `METADATA_PATH` and moves the finished file into the store, so the metadata disk also needs room for one book at a time.
+- **Permissions.** The server process (the container user, or the `user:` set in compose) needs read/write access. The directory is created on startup if it doesn't exist.
+- **Keep the path inside the container stable.** Versions are recorded in the database by their full path, e.g. `/versions/Audiobooks/…`. You can move the data on the host freely, but keep mounting it at the same container path and keep `VERSIONS_PATH` the same, or the server won't find existing versions.
+- **Backups.** Audiobookshelf's built-in backups contain the database (including the list of versions) but not the version files. Back up the store separately if you want to keep re-encodes; the originals in the library are never changed.
+- **Removing items.** Deleting a library item removes its versions from the database but leaves the folders in the store, so nothing is lost by accident; clean those up by hand if you want the space back. Deleting a version from the item page (admins only) removes its folder. The server only ever deletes directories inside `VERSIONS_PATH`.
+- **Docker gotcha.** Don't mount anything at `/lib` in the Alpine image: it hides the system libraries and the container won't start.
 
 # About
 
