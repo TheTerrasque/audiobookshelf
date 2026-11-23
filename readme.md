@@ -17,32 +17,49 @@
 # About this fork
 
 > [!NOTE]
-> **This is an unofficial fork** of [advplyr/audiobookshelf](https://github.com/advplyr/audiobookshelf), focused on comic (CBZ/CBR) handling. It's not affiliated with or supported by the Audiobookshelf project. It is rebased on upstream regularly; currently v2.38.2 on top of upstream v2.38.0.
+> **This is an unofficial fork** of [advplyr/audiobookshelf](https://github.com/advplyr/audiobookshelf). It's not affiliated with or supported by the Audiobookshelf project. All fork changes are collected on the `fork` branch (the default branch here), which is rebased on upstream regularly: currently v2.38.2 on top of upstream v2.38.0.
 >
-> **What's different** (latest work is on branch `feat/media-versions`, which builds on `feat/comic-file-nav`):
->
-> - **Server-side comic pages.** New endpoints `GET /api/items/:id/ebook/:fileid?/pages` (page list + ComicInfo.xml metadata) and `GET /api/items/:id/ebook/:fileid?/pages/:page` (a single page image). The web reader fetches pages one by one instead of downloading and unpacking the whole archive in the browser.
->   - Pages are cached in memory: an LRU cache sized in bytes (`COMIC_PAGE_CACHE_MAX_BYTES`, default 64 MB), plus a pool of open archives (`COMIC_EXTRACTOR_POOL_MAX`, default 4).
->   - CBZ files are streamed. CBR files are unpacked into a temp directory per archive, protected against zip-slip (entries escaping the directory).
-> - **Comic reader improvements.** Fit modes (fit to screen, fit to width, custom zoom), background colour, mouse-wheel zoom, scroll to top on page change, and a redesigned top bar.
-> - **Multi-file comics.** Books with several comic files can be read straight through: next/previous page crosses files, and a file list lets you jump between them.
->   - The order of the files can be changed (`PATCH /api/items/:id/ebook`).
->   - Reading progress remembers which file you were in (`mediaProgresses.ebookFileIno`, added by migration `v2.38.1`).
-> - **Format filter** in the library view (audiobook / ebook / comic).
-> - **Legacy fix.** Older records with an empty `ebookFormat` fall back to the file extension, so they still open as comics.
-> - **File versions** (branch `feat/media-versions`). The M4B encoder and "embed metadata" no longer touch library files, so library folders can be mounted read-only.
->   - Their output is saved as a new *version* under `VERSIONS_PATH`, which mirrors the library layout, e.g. `/versions/<library>/<author>/<book>/<version name>/`. Each version folder has a `version.json`.
->   - Each user picks which version they play on the item page; streaming, transcoding, downloads and the mobile app all follow that choice.
->   - Set `VERSIONS_PATH=/versions` and mount a writable volume there; without it, versions go to `<METADATA_PATH>/versions`. See [Hosting the version store](#hosting-the-version-store).
->   - The M4B encoder has optional audio processing: loudness normalization (EBU R128, adjustable target/true peak/range), dynamic range compression, voice clarity EQ, noise reduction, and a pitch-preserving speed change.
->   - A sped-up version has its own timeline. Progress and bookmarks are stored on the original timeline and the server converts positions for whichever version a user has selected (including offline sessions from a downloaded copy), so switching versions keeps your place.
->   - Admins can rename and delete versions from the item page (`GET/PATCH/DELETE /api/items/:id/versions[/:versionId]`, `PATCH /api/me/item/:id/version`). Added by migration `v2.38.2-add-media-versions`.
-> - **Quick connect for the mobile app.** **Account → Connect Mobile App** shows a QR code. Scanning it with a phone opens the app fork with the server address and your username filled in; you still log in as usual. The code is an `audiobookshelf://connect?address=…&username=…` link with no credentials in it. The address defaults to the one in your browser and can be edited (for example when you're browsing on `localhost`); the edit is remembered per browser.
-> - **Docker images on GHCR.** Every push builds `ghcr.io/theterrasque/audiobookshelf` for amd64 and arm64. See [Running the fork with Docker](#running-the-fork-with-docker).
->
-> The matching mobile app fork, which reads comics through the same page API, has the audio version picker and scans the quick connect QR codes, is at [TheTerrasque/audiobookshelf-app](https://github.com/TheTerrasque/audiobookshelf-app).
->
-> The database migrations only add columns and a table, but this is still a one-way step: going back to official releases is untested.
+> The database migrations only add columns and a table, but switching to this fork is still a one-way step: going back to official releases is untested.
+
+## Extra features
+
+### Comics
+
+- **Big comics open instantly.** CBZ and CBR pages are served one at a time by the server instead of the browser downloading and unpacking the whole archive. Pages are cached in memory, so paging back and forth is fast.
+- **A better comic reader.** Fit to screen, fit to width or custom zoom, mouse-wheel zoom, a choice of background colour, scrolling to the top on each new page, and a cleaner top bar.
+- **Series in one book.** A book with several comic files (one per volume, say) reads straight through: the next page after the last page of one file is the first page of the next. A file list lets you jump between them, and you can change the file order.
+- **Resume in the right volume.** Reading progress remembers which file you were in, on the web and in the app fork.
+- **Comic format filter.** Filter a library by audiobook, ebook or comic.
+- **Older comics open too.** Books scanned before the format was recorded are recognised from the file extension.
+
+### Audio versions
+
+- **Your library files are never modified.** The M4B encoder and "embed metadata" save their output as a separate *version* of the book in a version store, so library folders can be mounted read-only and the originals are always kept.
+- **Pick which version you listen to.** Each user chooses a version per book on the item page (or in the app fork). Streaming, transcoding, downloads and the mobile app all use it. Admins can rename and delete versions.
+- **Clean up the audio while encoding.** The M4B encoder can normalize loudness (EBU R128, adjustable), compress dynamic range, add a voice clarity EQ, reduce noise, and change speed without changing pitch.
+- **Sped-up versions keep your place.** Progress and bookmarks stay on the original timeline and are converted for the version you've picked, including offline listening from a downloaded copy, so switching versions never loses your position.
+
+### Mobile app
+
+- **Connect the app with a QR code.** **Account → Connect Mobile App** shows a QR code. Scan it with your phone and the [app fork](https://github.com/TheTerrasque/audiobookshelf-app) opens with the server address and your username filled in; you only enter your password. The code contains no credentials.
+- **A matching app.** The [app fork](https://github.com/TheTerrasque/audiobookshelf-app) reads comics page by page from this server, follows multi-file comics, has the audio version picker and scans the QR codes.
+
+### Hosting
+
+- **Ready-made Docker images** for amd64 and arm64 on GitHub Container Registry, built from every push. See [Running the fork with Docker](#running-the-fork-with-docker).
+- **A separate version store** for the audio versions. See [Hosting the version store](#hosting-the-version-store).
+
+<details>
+<summary>Technical details (API, settings, migrations)</summary>
+
+- **Comic pages API:** `GET /api/items/:id/ebook/:fileid?/pages` returns the page list and ComicInfo.xml metadata; `GET /api/items/:id/ebook/:fileid?/pages/:page` returns one page image (1-based).
+- **Comic page cache:** an in-memory LRU sized in bytes (`COMIC_PAGE_CACHE_MAX_BYTES`, default 64 MB) and a pool of open archives (`COMIC_EXTRACTOR_POOL_MAX`, default 4). CBZ files are streamed; CBR files are unpacked into a temp directory per archive, protected against entries escaping it (zip-slip).
+- **Comic file order:** `PATCH /api/items/:id/ebook`. Per-file progress is stored in `mediaProgresses.ebookFileIno` (migration `v2.38.1`).
+- **Versions:** stored under `VERSIONS_PATH` (default `<METADATA_PATH>/versions`). `GET/PATCH/DELETE /api/items/:id/versions[/:versionId]` (rename and delete are admin only), `PATCH /api/me/item/:id/version` to choose one. Migration `v2.38.2-add-media-versions`.
+- **Quick connect link:** `audiobookshelf://connect?address=<server url>&username=<username>`.
+
+</details>
+
 
 ## Running the fork with Docker
 
@@ -50,16 +67,16 @@ Images are built by [`docker-build-fork.yml`](.github/workflows/docker-build-for
 
 | Tag | What it is |
 |---|---|
-| `ghcr.io/theterrasque/audiobookshelf:<branch>` | Latest build of a branch, with `/` replaced by `-`, e.g. `:feat-media-versions` |
+| `ghcr.io/theterrasque/audiobookshelf:latest` | Latest build of the `fork` branch, with all fork features. **Use this one.** |
+| `ghcr.io/theterrasque/audiobookshelf:<branch>` | Latest build of another branch, with `/` replaced by `-`, e.g. `:feat-something` for a feature still in progress |
 | `ghcr.io/theterrasque/audiobookshelf:sha-<commit>` | A specific commit, e.g. `:sha-92f5ef3` |
-| `ghcr.io/theterrasque/audiobookshelf:latest` | Latest build of the repository's default branch |
 
 Use it in place of the official image in the example [`docker-compose.yml`](docker-compose.yml). Everything else (ports, `/config`, `/metadata`, library mounts) works as in upstream.
 
 ```yaml
 services:
   audiobookshelf:
-    image: ghcr.io/theterrasque/audiobookshelf:feat-media-versions
+    image: ghcr.io/theterrasque/audiobookshelf:latest
     ports:
       - 13378:80
     volumes:
