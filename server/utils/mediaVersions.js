@@ -48,20 +48,140 @@ function getSelectedAudioVersionId(user, libraryItemId) {
 }
 
 /**
+ * Version timeline length / original timeline length. 1 unless the version changed the speed.
+ * A speed of 1.25 gives 0.8: 100 s into the original is 80 s into the version.
+ *
+ * @param {import('../models/MediaVersion')|{options?: Object}} version
+ * @returns {number}
+ */
+function getVersionTimeScale(version) {
+  const speed = Number(version?.options?.speed)
+  if (!Number.isFinite(speed) || speed <= 0 || speed === 1) return 1
+  return 1 / speed
+}
+
+/**
+ * Time scale of the audio version a user has selected (cached on the selection so it can be used
+ * synchronously when serializing progress and bookmarks).
+ *
+ * Progress and bookmarks are stored on the original timeline. The API speaks the user's timeline:
+ * positions going out are multiplied by this, positions coming in are divided by it.
+ *
+ * @param {import('../models/User')} user
+ * @param {string} libraryItemId
+ * @returns {number}
+ */
+function getUserTimeScale(user, libraryItemId) {
+  const scale = Number(getSelections(user)[libraryItemId]?.audioTimeScale)
+  return Number.isFinite(scale) && scale > 0 ? scale : 1
+}
+
+/** Original timeline -> user's timeline */
+function toUserTime(user, libraryItemId, time) {
+  const scale = getUserTimeScale(user, libraryItemId)
+  if (scale === 1 || typeof time !== 'number' || !Number.isFinite(time)) return time
+  return time * scale
+}
+
+/** User's timeline -> original timeline */
+function fromUserTime(user, libraryItemId, time, scale = null) {
+  scale = scale ?? getUserTimeScale(user, libraryItemId)
+  if (scale === 1 || typeof time !== 'number' || !Number.isFinite(time)) return time
+  return time / scale
+}
+
+/**
+ * Media progress JSON (old format) as seen by this user. Book progress only; podcast episodes never have versions.
+ *
+ * @param {import('../models/User')} user
+ * @param {Object} progressJson
+ */
+function progressJsonForUser(user, progressJson) {
+  if (!progressJson || progressJson.episodeId || !progressJson.libraryItemId) return progressJson
+  const scale = getUserTimeScale(user, progressJson.libraryItemId)
+  if (scale === 1) return progressJson
+  return {
+    ...progressJson,
+    currentTime: typeof progressJson.currentTime === 'number' ? progressJson.currentTime * scale : progressJson.currentTime,
+    duration: typeof progressJson.duration === 'number' ? progressJson.duration * scale : progressJson.duration
+  }
+}
+
+/**
+ * @param {import('../models/User')} user
+ * @param {{libraryItemId: string, time: number}} bookmark
+ */
+function bookmarkForUser(user, bookmark) {
+  if (!bookmark) return bookmark
+  return { ...bookmark, time: toUserTime(user, bookmark.libraryItemId, bookmark.time) }
+}
+
+/**
+ * Work out which timeline an incoming position is on when the client tells us the duration it played
+ * (local/offline sessions, progress updates). A downloaded copy may be a different version than the
+ * user's current selection, so match the duration against the item's versions first.
+ *
+ * @param {import('../models/User')} user
+ * @param {import('../models/LibraryItem')} libraryItem
+ * @param {number} [duration] - duration reported by the client
+ * @returns {Promise<number>}
+ */
+async function resolveIncomingTimeScale(user, libraryItem, duration) {
+  const selected = getUserTimeScale(user, libraryItem?.id)
+  if (!libraryItem?.isBook || !(duration > 0)) return selected
+  const originalDuration = libraryItem.media.duration || 0
+  const close = (a, b) => Math.abs(a - b) <= Math.max(2, b * 0.002)
+  // Same length as the selection's timeline: trust the selection
+  if (originalDuration > 0 && close(duration, originalDuration * selected)) return selected
+  if (originalDuration > 0 && close(duration, originalDuration)) return 1
+  const versions = await getVersionsForItem(libraryItem.id)
+  const match = versions.find((v) => v.kind === 'audio' && v.duration && close(duration, v.duration))
+  return match ? getVersionTimeScale(match) : selected
+}
+
+/**
+ * Map a progress update sent by a client (PATCH /api/me/progress) to the original timeline.
+ *
+ * @param {import('../models/User')} user
+ * @param {Object} payload
+ * @returns {Promise<Object>}
+ */
+async function progressPayloadFromUser(user, payload) {
+  if (!payload?.libraryItemId || payload.episodeId) return payload
+  if (typeof payload.currentTime !== 'number' && typeof payload.duration !== 'number') return payload
+  let scale = getUserTimeScale(user, payload.libraryItemId)
+  if (payload.duration > 0) {
+    const versions = await getVersionsForItem(payload.libraryItemId)
+    if (versions.some((v) => getVersionTimeScale(v) !== 1)) {
+      const libraryItem = await Database.libraryItemModel.getExpandedById(payload.libraryItemId)
+      if (libraryItem) scale = await resolveIncomingTimeScale(user, libraryItem, payload.duration)
+    }
+  }
+  if (scale === 1) return payload
+  const mapped = { ...payload }
+  if (typeof mapped.currentTime === 'number') mapped.currentTime = mapped.currentTime / scale
+  if (typeof mapped.duration === 'number') mapped.duration = mapped.duration / scale
+  return mapped
+}
+
+/**
  * Set (or clear with versionId=null) a user's version choice for an item. Saves the user.
  *
  * @param {import('../models/User')} user
  * @param {string} libraryItemId
  * @param {'audio'} kind
  * @param {string|null} versionId
+ * @param {number} [timeScale=1] - see getVersionTimeScale
  */
-async function setSelection(user, libraryItemId, kind, versionId) {
+async function setSelection(user, libraryItemId, kind, versionId, timeScale = 1) {
   if (kind !== 'audio') throw new Error(`Unsupported version kind "${kind}"`)
   if (!user.extraData) user.extraData = {}
   const selections = { ...(user.extraData.mediaVersions || {}) }
   const itemSelection = { ...(selections[libraryItemId] || {}) }
   if (versionId) itemSelection.audio = versionId
   else delete itemSelection.audio
+  if (versionId && timeScale && timeScale !== 1) itemSelection.audioTimeScale = timeScale
+  else delete itemSelection.audioTimeScale
 
   if (Object.keys(itemSelection).length) selections[libraryItemId] = itemSelection
   else delete selections[libraryItemId]
@@ -129,6 +249,7 @@ async function getAudioView(user, libraryItem) {
   const audioFiles = structuredClone(version.files)
   return {
     version,
+    timeScale: getVersionTimeScale(version),
     audioFiles,
     tracks: libraryItem.media.getTracklist(libraryItem.id, null, audioFiles),
     duration: version.duration || audioFiles.reduce((sum, af) => sum + (af.duration || 0), 0),
@@ -169,7 +290,7 @@ async function applyToExpandedItemJson(itemJson, user, libraryItem, options = {}
 
   const selectedId = getSelectedAudioVersionId(user, libraryItem.id)
   const selected = versions.find((v) => v.id === selectedId && v.kind === 'audio' && v.files?.length)
-  itemJson.media.selectedVersions = { audio: selected?.id || null }
+  itemJson.media.selectedVersions = { audio: selected?.id || null, audioTimeScale: selected ? getVersionTimeScale(selected) : 1 }
   if (!selected || options.originalFiles) return itemJson
 
   const audioFiles = structuredClone(selected.files)
@@ -347,6 +468,14 @@ module.exports = {
   clearSelectionsForVersion,
   getVersionsForItem,
   getSelectedAudioVersion,
+  getVersionTimeScale,
+  getUserTimeScale,
+  toUserTime,
+  fromUserTime,
+  progressJsonForUser,
+  bookmarkForUser,
+  resolveIncomingTimeScale,
+  progressPayloadFromUser,
   getAudioView,
   findVersionFileByIno,
   applyToExpandedItemJson,

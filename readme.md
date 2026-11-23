@@ -34,6 +34,8 @@
 >   - Their output is saved as a new *version* under `VERSIONS_PATH`, which mirrors the library layout, e.g. `/versions/<library>/<author>/<book>/<version name>/`. Each version folder has a `version.json`.
 >   - Each user picks which version they play on the item page; streaming, transcoding, downloads and the mobile app all follow that choice.
 >   - Set `VERSIONS_PATH=/versions` and mount a writable volume there; without it, versions go to `<METADATA_PATH>/versions`.
+>   - The M4B encoder has optional audio processing: loudness normalization (EBU R128, adjustable target/true peak/range), dynamic range compression, voice clarity EQ, noise reduction, and a pitch-preserving speed change.
+>   - A sped-up version has its own timeline. Progress and bookmarks are stored on the original timeline and the server converts positions for whichever version a user has selected (including offline sessions from a downloaded copy), so switching versions keeps your place.
 >
 > The matching Android app fork, which reads comics through the same page API, is at [TheTerrasque/audiobookshelf-app](https://github.com/TheTerrasque/audiobookshelf-app).
 >

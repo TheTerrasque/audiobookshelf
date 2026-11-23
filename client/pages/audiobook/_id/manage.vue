@@ -103,6 +103,7 @@
       </div>
       <div v-else-if="isM4BTool" class="mb-4">
         <widgets-encoder-options-card ref="encoderOptionsCard" :audio-tracks="audioFiles" :disabled="processing || isTaskFinished" />
+        <widgets-audio-processing-options-card ref="audioProcessingCard" :disabled="processing || isTaskFinished" />
       </div>
 
       <div class="mb-4">
@@ -340,10 +341,15 @@ export default {
       if (this.$refs.codecInput) this.$refs.codecInput.blur()
 
       const encodeOptions = this.$refs.encoderOptionsCard.getEncodingOptions()
+      const processingOptions = this.$refs.audioProcessingCard?.getOptions() || {}
+      if (encodeOptions.codec === 'copy' && Object.keys(processingOptions).length) {
+        this.$toast.error(this.$strings.LabelAudioProcessingNeedsEncode)
+        return
+      }
 
       this.encodingOptions = encodeOptions
 
-      const queryParams = new URLSearchParams(encodeOptions)
+      const queryParams = new URLSearchParams({ ...encodeOptions, ...processingOptions })
       if (this.versionLabel.trim()) queryParams.set('label', this.versionLabel.trim())
 
       this.processing = true

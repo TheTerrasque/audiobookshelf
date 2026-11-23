@@ -9,6 +9,7 @@ const SocketAuthority = require('../SocketAuthority')
 const { isWritable } = require('../utils/fileUtils')
 const mediaVersions = require('../utils/mediaVersions')
 const TrackProgressMonitor = require('../objects/TrackProgressMonitor')
+const audioProcessing = require('../utils/audioProcessing')
 
 /**
  * @typedef AbMergeEncodeOptions
@@ -16,6 +17,14 @@ const TrackProgressMonitor = require('../objects/TrackProgressMonitor')
  * @property {string} channels
  * @property {string} bitrate
  * @property {string} [label] - name of the new file version (fork)
+ * @property {string} [normalize] - fork: audio processing options, see utils/audioProcessing.js
+ * @property {string} [loudnessTarget]
+ * @property {string} [truePeak]
+ * @property {string} [loudnessRange]
+ * @property {string} [compress]
+ * @property {string} [voiceEq]
+ * @property {string} [denoise]
+ * @property {string} [speed]
  */
 
 class AbMergeManager {
@@ -60,9 +69,14 @@ class AbMergeManager {
     const task = new Task()
 
     // Fork: the m4b becomes a new file version outside the library folder; originals are never touched
-    const { label: requestedLabel, ...encodeOptions } = options || {}
-    options = encodeOptions
-    const versionLabel = (typeof requestedLabel === 'string' && requestedLabel.trim()) || mediaVersions.defaultVersionLabel(['m4b', options.bitrate].filter(Boolean).join(' '))
+    const { label: requestedLabel, normalize, loudnessTarget, truePeak, loudnessRange, compress, voiceEq, denoise, speed, ...encodeOptions } = options || {}
+    // Throws on invalid values; ToolsController validates first so this only fails for direct callers
+    const processing = audioProcessing.parseAudioProcessingOptions({ normalize, loudnessTarget, truePeak, loudnessRange, compress, voiceEq, denoise, speed })
+    const processingSummary = audioProcessing.summarizeAudioProcessing(processing)
+    options = { ...encodeOptions, audioFilters: audioProcessing.buildAudioFilters(processing) }
+    // A speed change makes the version shorter/longer; positions map between timelines by this factor
+    const timeScale = processing.speed && processing.speed !== 1 ? 1 / processing.speed : 1
+    const versionLabel = (typeof requestedLabel === 'string' && requestedLabel.trim()) || mediaVersions.defaultVersionLabel(['m4b', options.bitrate, timeScale !== 1 ? `${processing.speed}x` : null].filter(Boolean).join(' '))
     const versionDir = await mediaVersions.getNewVersionDir(libraryItem, versionLabel)
 
     const audiobookBaseName = libraryItem.isFile ? Path.basename(libraryItem.path, Path.extname(libraryItem.path)) : Path.basename(libraryItem.path)
@@ -83,10 +97,12 @@ class AbMergeManager {
       versionLabel,
       itemCachePath,
       ffmetadataObject: ffmpegHelpers.getFFMetadataObject(libraryItem, 1),
-      chapters: libraryItem.media.chapters?.map((c) => ({ ...c })),
+      chapters: libraryItem.media.chapters?.map((c) => ({ ...c, start: c.start * timeScale, end: c.end * timeScale })),
       coverPath: libraryItem.media.coverPath,
       ffmetadataPath,
-      duration: libraryItem.media.duration,
+      duration: libraryItem.media.duration * timeScale,
+      timeScale,
+      processingSummary,
       encodeOptions: options
     }
 
@@ -154,7 +170,7 @@ class AbMergeManager {
     const embedFraction = 1 - encodeFraction
     try {
       const trackProgressMonitor = new TrackProgressMonitor(
-        libraryItem.media.includedAudioFiles.map((t) => t.duration),
+        libraryItem.media.includedAudioFiles.map((t) => t.duration * task.data.timeScale),
         (trackIndex) => SocketAuthority.adminEmitter('track_started', { libraryItemId: libraryItem.id, ino: task.data.inos[trackIndex] }),
         (trackIndex, progressInTrack, taskProgress) => {
           SocketAuthority.adminEmitter('track_progress', { libraryItemId: libraryItem.id, ino: task.data.inos[trackIndex], progress: progressInTrack })
@@ -223,7 +239,7 @@ class AbMergeManager {
         filePaths: [task.data.targetFilepath],
         label: task.data.versionLabel,
         tool: 'encode-m4b',
-        options: { ...encodingOptions },
+        options: { codec: encodingOptions.codec, bitrate: encodingOptions.bitrate, channels: encodingOptions.channels, ...task.data.processingSummary },
         chapters: task.data.chapters
       })
       task.data.versionId = version.id

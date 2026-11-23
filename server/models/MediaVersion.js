@@ -54,6 +54,8 @@ class MediaVersion extends Model {
       label: this.label,
       tool: this.tool,
       options: this.options,
+      // Fork: version timeline length / original (speed changes); positions convert by this factor
+      timeScale: Number(this.options?.speed) > 0 ? 1 / Number(this.options.speed) : 1,
       numFiles: this.files?.length || 0,
       duration: this.duration,
       size: this.size,

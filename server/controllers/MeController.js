@@ -1,6 +1,7 @@
 const { Request, Response } = require('express')
 const { Op } = require('sequelize')
 const Logger = require('../Logger')
+const mediaVersions = require('../utils/mediaVersions')
 const SocketAuthority = require('../SocketAuthority')
 const Database = require('../Database')
 const { sort } = require('../libs/fastSort')
@@ -110,7 +111,7 @@ class MeController {
    * @param {Response} res
    */
   getAllMediaProgress(req, res) {
-    const mediaProgress = req.user.mediaProgresses?.map((mp) => mp.getOldMediaProgress()) || []
+    const mediaProgress = req.user.mediaProgresses?.map((mp) => mediaVersions.progressJsonForUser(req.user, mp.getOldMediaProgress())) || []
     res.json({ mediaProgress })
   }
 
@@ -121,7 +122,7 @@ class MeController {
    * @param {Response} res
    */
   getAllBookmarks(req, res) {
-    const bookmarks = req.user.bookmarks?.map((bookmark) => ({ ...bookmark })) || []
+    const bookmarks = req.user.bookmarks?.map((bookmark) => mediaVersions.bookmarkForUser(req.user, bookmark)) || []
     res.json({ bookmarks })
   }
 
@@ -142,7 +143,7 @@ class MeController {
       return res.sendStatus(403)
     }
 
-    const bookmarks = req.user.bookmarks?.filter((bookmark) => bookmark.libraryItemId === libraryItem.id).map((bookmark) => ({ ...bookmark })) || []
+    const bookmarks = req.user.bookmarks?.filter((bookmark) => bookmark.libraryItemId === libraryItem.id).map((bookmark) => mediaVersions.bookmarkForUser(req.user, bookmark)) || []
     res.json({ bookmarks })
   }
 
@@ -241,7 +242,7 @@ class MeController {
     if (!mediaProgress) {
       return res.sendStatus(404)
     }
-    res.json(mediaProgress)
+    res.json(mediaVersions.progressJsonForUser(req.user, mediaProgress))
   }
 
   /**
@@ -278,7 +279,7 @@ class MeController {
       libraryItemId: req.params.libraryItemId,
       episodeId: req.params.episodeId
     }
-    const mediaProgressResponse = await req.user.createUpdateMediaProgressFromPayload(progressUpdatePayload)
+    const mediaProgressResponse = await req.user.createUpdateMediaProgressFromPayload(await mediaVersions.progressPayloadFromUser(req.user, progressUpdatePayload))
     if (mediaProgressResponse.error) {
       return res.status(mediaProgressResponse.statusCode || 400).send(mediaProgressResponse.error)
     }
@@ -302,7 +303,7 @@ class MeController {
 
     let hasUpdated = false
     for (const itemProgress of itemProgressPayloads) {
-      const mediaProgressResponse = await req.user.createUpdateMediaProgressFromPayload(itemProgress)
+      const mediaProgressResponse = await req.user.createUpdateMediaProgressFromPayload(await mediaVersions.progressPayloadFromUser(req.user, itemProgress))
       if (mediaProgressResponse.error) {
         Logger.error(`[MeController] batchUpdateMediaProgress: ${mediaProgressResponse.error}`)
         continue
@@ -346,9 +347,10 @@ class MeController {
       return res.status(400).send('Invalid title')
     }
 
-    const bookmark = await req.user.createBookmark(req.params.id, time, title)
+    // Fork: bookmarks are stored on the original timeline (see mediaVersions time scale)
+    const bookmark = await req.user.createBookmark(req.params.id, mediaVersions.fromUserTime(req.user, req.params.id, time), title)
     SocketAuthority.clientEmitter(req.user.id, 'user_updated', req.user.toOldJSONForBrowser())
-    res.json(bookmark)
+    res.json(mediaVersions.bookmarkForUser(req.user, bookmark))
   }
 
   /**
@@ -379,14 +381,14 @@ class MeController {
       return res.status(400).send('Invalid title')
     }
 
-    const bookmark = await req.user.updateBookmark(req.params.id, time, title)
+    const bookmark = await req.user.updateBookmark(req.params.id, mediaVersions.fromUserTime(req.user, req.params.id, time), title)
     if (!bookmark) {
       Logger.error(`[MeController] updateBookmark not found for library item id "${req.params.id}" and time "${time}"`)
       return res.sendStatus(404)
     }
 
     SocketAuthority.clientEmitter(req.user.id, 'user_updated', req.user.toOldJSONForBrowser())
-    res.json(bookmark)
+    res.json(mediaVersions.bookmarkForUser(req.user, bookmark))
   }
 
   /**
@@ -407,10 +409,11 @@ class MeController {
       return res.sendStatus(403)
     }
 
-    const time = Number(req.params.time)
-    if (isNaN(time)) {
+    const userTime = Number(req.params.time)
+    if (isNaN(userTime)) {
       return res.status(400).send('Invalid time')
     }
+    const time = mediaVersions.fromUserTime(req.user, req.params.id, userTime)
 
     if (!req.user.findBookmark(req.params.id, time)) {
       Logger.error(`[MeController] removeBookmark not found`)

@@ -37,7 +37,7 @@
           <tr v-for="version in audioVersions" :key="version.id">
             <td class="px-4">
               <p class="truncate">{{ version.label }}</p>
-              <p class="text-xs text-gray-400">{{ toolLabel(version.tool) }}<span v-if="version.numFiles > 1"> · {{ version.numFiles }} files</span></p>
+              <p class="text-xs text-gray-400">{{ toolLabel(version.tool) }}<span v-if="version.numFiles > 1"> · {{ version.numFiles }} files</span><span v-if="processingSummary(version)"> · {{ processingSummary(version) }}</span></p>
             </td>
             <td class="hidden md:table-cell">{{ $elapsedPretty(version.duration) }}</td>
             <td>{{ $bytesPretty(version.size) }}</td>
@@ -110,6 +110,16 @@ export default {
     }
   },
   methods: {
+    processingSummary(version) {
+      const o = version.options || {}
+      const parts = []
+      if (o.speed && o.speed !== 1) parts.push(`${o.speed}×`)
+      if (o.normalize) parts.push(`${this.$strings.LabelNormalizeVolume} ${o.normalize.target} LUFS`)
+      if (o.compress) parts.push(`${this.$strings.LabelDynamicRangeCompression}: ${o.compress}`)
+      if (o.voiceEq) parts.push(this.$strings.LabelVoiceClarity)
+      if (o.denoise) parts.push(`${this.$strings.LabelNoiseReduction}: ${o.denoise}`)
+      return parts.join(' · ')
+    },
     toolLabel(tool) {
       if (tool === 'encode-m4b') return this.$strings.LabelVersionToolEncodeM4b
       if (tool === 'embed-metadata') return this.$strings.LabelVersionToolEmbedMetadata

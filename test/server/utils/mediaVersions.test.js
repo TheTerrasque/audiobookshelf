@@ -116,6 +116,132 @@ describe('mediaVersions', () => {
     })
   })
 
+  describe('time scale', () => {
+    it('getVersionTimeScale', () => {
+      expect(mediaVersions.getVersionTimeScale({ options: { speed: 1.25 } })).to.be.closeTo(0.8, 1e-9)
+      expect(mediaVersions.getVersionTimeScale({ options: { speed: 1 } })).to.equal(1)
+      expect(mediaVersions.getVersionTimeScale({ options: {} })).to.equal(1)
+      expect(mediaVersions.getVersionTimeScale({})).to.equal(1)
+      expect(mediaVersions.getVersionTimeScale(null)).to.equal(1)
+      expect(mediaVersions.getVersionTimeScale({ options: { speed: 'abc' } })).to.equal(1)
+      expect(mediaVersions.getVersionTimeScale({ options: { speed: 0 } })).to.equal(1)
+    })
+
+    it('setSelection stores audioTimeScale and clearing removes it', async () => {
+      await mediaVersions.setSelection(user, libraryItem.id, 'audio', 'vid-1', 0.8)
+      let reloaded = await Database.userModel.findByPk(user.id)
+      expect(reloaded.extraData.mediaVersions[libraryItem.id]).to.deep.equal({ audio: 'vid-1', audioTimeScale: 0.8 })
+      expect(mediaVersions.getUserTimeScale(reloaded, libraryItem.id)).to.equal(0.8)
+
+      await mediaVersions.setSelection(user, libraryItem.id, 'audio', 'vid-1', 1)
+      reloaded = await Database.userModel.findByPk(user.id)
+      expect(reloaded.extraData.mediaVersions[libraryItem.id]).to.deep.equal({ audio: 'vid-1' })
+
+      await mediaVersions.setSelection(user, libraryItem.id, 'audio', 'vid-1', 0.8)
+      await mediaVersions.setSelection(user, libraryItem.id, 'audio', null, 0.8)
+      reloaded = await Database.userModel.findByPk(user.id)
+      expect(reloaded.extraData.mediaVersions).to.deep.equal({})
+      expect(mediaVersions.getUserTimeScale(reloaded, libraryItem.id)).to.equal(1)
+    })
+
+    it('toUserTime / fromUserTime round trip', async () => {
+      await mediaVersions.setSelection(user, libraryItem.id, 'audio', 'vid-1', 0.8)
+      expect(mediaVersions.toUserTime(user, libraryItem.id, 100)).to.be.closeTo(80, 1e-9)
+      expect(mediaVersions.fromUserTime(user, libraryItem.id, 80)).to.be.closeTo(100, 1e-9)
+      expect(mediaVersions.fromUserTime(user, libraryItem.id, mediaVersions.toUserTime(user, libraryItem.id, 123.4))).to.be.closeTo(123.4, 1e-9)
+      expect(mediaVersions.fromUserTime(user, libraryItem.id, 40, 0.5)).to.equal(80)
+      expect(mediaVersions.toUserTime(user, otherItem.id, 100)).to.equal(100)
+      expect(mediaVersions.toUserTime(user2, libraryItem.id, 100)).to.equal(100)
+      expect(mediaVersions.toUserTime(user, libraryItem.id, undefined)).to.be.undefined
+    })
+
+    it('progressJsonForUser scales book progress only', async () => {
+      await mediaVersions.setSelection(user, libraryItem.id, 'audio', 'vid-1', 0.8)
+      const progress = { libraryItemId: libraryItem.id, currentTime: 100, duration: 200, progress: 0.5 }
+      const scaled = mediaVersions.progressJsonForUser(user, progress)
+      expect(scaled.currentTime).to.be.closeTo(80, 1e-9)
+      expect(scaled.duration).to.be.closeTo(160, 1e-9)
+      expect(scaled.progress).to.equal(0.5)
+      expect(progress.currentTime).to.equal(100)
+
+      const episode = { libraryItemId: libraryItem.id, episodeId: 'ep1', currentTime: 100, duration: 200 }
+      expect(mediaVersions.progressJsonForUser(user, episode)).to.equal(episode)
+      expect(mediaVersions.progressJsonForUser(user2, progress)).to.equal(progress)
+    })
+
+    it('bookmarkForUser scales time', async () => {
+      await mediaVersions.setSelection(user, libraryItem.id, 'audio', 'vid-1', 0.8)
+      const bm = { libraryItemId: libraryItem.id, time: 100, title: 't' }
+      const out = mediaVersions.bookmarkForUser(user, bm)
+      expect(out.time).to.be.closeTo(80, 1e-9)
+      expect(out.title).to.equal('t')
+      expect(bm.time).to.equal(100)
+      expect(mediaVersions.bookmarkForUser(user2, bm).time).to.equal(100)
+      expect(mediaVersions.bookmarkForUser(user, null)).to.be.null
+    })
+
+    describe('with a 1.25x version', () => {
+      let fastVersion
+      beforeEach(async () => {
+        const book = await Database.bookModel.findByPk(libraryItem.mediaId)
+        book.duration = 1000
+        await book.save()
+        libraryItem = await Database.libraryItemModel.getExpandedById(libraryItem.id)
+        fastVersion = await makeVersion(libraryItem, { files: [makeFile('ver_a_1', 'a.m4b', 800)], duration: 800 })
+        fastVersion.options = { speed: 1.25 }
+        await fastVersion.save()
+      })
+
+      it('resolveIncomingTimeScale uses the selected scale when no duration is given', async () => {
+        await mediaVersions.setSelection(user, libraryItem.id, 'audio', fastVersion.id, 0.8)
+        expect(await mediaVersions.resolveIncomingTimeScale(user, libraryItem)).to.equal(0.8)
+        expect(await mediaVersions.resolveIncomingTimeScale(user2, libraryItem)).to.equal(1)
+      })
+
+      it('resolveIncomingTimeScale: duration matching the original gives 1', async () => {
+        await mediaVersions.setSelection(user, libraryItem.id, 'audio', fastVersion.id, 0.8)
+        expect(await mediaVersions.resolveIncomingTimeScale(user, libraryItem, 1000)).to.equal(1)
+      })
+
+      it("resolveIncomingTimeScale: duration matching a sped-up version gives that version's scale", async () => {
+        expect(await mediaVersions.resolveIncomingTimeScale(user2, libraryItem, 800)).to.be.closeTo(0.8, 1e-9)
+      })
+
+      it('resolveIncomingTimeScale: unknown duration falls back to the selection', async () => {
+        await mediaVersions.setSelection(user, libraryItem.id, 'audio', fastVersion.id, 0.8)
+        expect(await mediaVersions.resolveIncomingTimeScale(user, libraryItem, 555)).to.equal(0.8)
+      })
+
+      it('progressPayloadFromUser returns the payload unchanged without time fields', async () => {
+        await mediaVersions.setSelection(user, libraryItem.id, 'audio', fastVersion.id, 0.8)
+        const payload = { libraryItemId: libraryItem.id, isFinished: true }
+        expect(await mediaVersions.progressPayloadFromUser(user, payload)).to.equal(payload)
+      })
+
+      it('progressPayloadFromUser leaves episodes and unscaled users unchanged', async () => {
+        const ep = { libraryItemId: libraryItem.id, episodeId: 'e', currentTime: 10, duration: 800 }
+        expect(await mediaVersions.progressPayloadFromUser(user, ep)).to.equal(ep)
+        const payload = { libraryItemId: libraryItem.id, currentTime: 10 }
+        expect(await mediaVersions.progressPayloadFromUser(user2, payload)).to.equal(payload)
+      })
+
+      it('progressPayloadFromUser maps times back when duration matches the sped-up version', async () => {
+        const payload = { libraryItemId: libraryItem.id, currentTime: 80, duration: 800, progress: 0.1 }
+        const out = await mediaVersions.progressPayloadFromUser(user2, payload)
+        expect(out.currentTime).to.be.closeTo(100, 1e-9)
+        expect(out.duration).to.be.closeTo(1000, 1e-9)
+        expect(out.progress).to.equal(0.1)
+        expect(payload.currentTime).to.equal(80)
+      })
+
+      it('progressPayloadFromUser uses the selection scale when no duration is sent', async () => {
+        await mediaVersions.setSelection(user, libraryItem.id, 'audio', fastVersion.id, 0.8)
+        const out = await mediaVersions.progressPayloadFromUser(user, { libraryItemId: libraryItem.id, currentTime: 80 })
+        expect(out.currentTime).to.be.closeTo(100, 1e-9)
+      })
+    })
+  })
+
   describe('getSelectedAudioVersion', () => {
     it('returns null without a selection', async () => {
       await makeVersion(libraryItem)
@@ -169,7 +295,7 @@ describe('mediaVersions', () => {
       await mediaVersions.applyToExpandedItemJson(json, user, libraryItem)
       expect(json.media.versions).to.have.length(1)
       expect(json.media.versions[0].id).to.equal(version.id)
-      expect(json.media.selectedVersions).to.deep.equal({ audio: null })
+      expect(json.media.selectedVersions).to.deep.equal({ audio: null, audioTimeScale: 1 })
       expect(json.media.audioFiles.map((f) => f.ino)).to.deep.equal(origInos)
     })
 
@@ -179,14 +305,14 @@ describe('mediaVersions', () => {
 
       const json1 = libraryItem.toOldJSONExpanded()
       await mediaVersions.applyToExpandedItemJson(json1, user, libraryItem)
-      expect(json1.media.selectedVersions).to.deep.equal({ audio: version.id })
+      expect(json1.media.selectedVersions).to.deep.equal({ audio: version.id, audioTimeScale: 1 })
       expect(json1.media.audioFiles.map((f) => f.ino)).to.deep.equal(version.files.map((f) => f.ino))
       expect(json1.media.tracks.map((t) => t.ino)).to.deep.equal(version.files.map((f) => f.ino))
       expect(json1.media.duration).to.equal(150)
 
       const json2 = libraryItem.toOldJSONExpanded()
       await mediaVersions.applyToExpandedItemJson(json2, user2, libraryItem)
-      expect(json2.media.selectedVersions).to.deep.equal({ audio: null })
+      expect(json2.media.selectedVersions).to.deep.equal({ audio: null, audioTimeScale: 1 })
       expect(json2.media.audioFiles.map((f) => f.ino)).to.deep.equal(['111'])
       expect(json2.media.versions).to.have.length(1)
     })

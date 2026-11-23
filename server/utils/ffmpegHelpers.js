@@ -472,6 +472,13 @@ async function mergeAudioFiles(audioTracks, duration, itemCachePath, outputFileP
 
   if (audioRequiresEncode) {
     ffmpeg.outputOptions(['-map 0:a', `-acodec ${audioCodec}`, `-ac ${audioChannels}`, `-b:a ${audioBitrate}`])
+    // Fork: optional processing chain (see utils/audioProcessing.js)
+    const audioFilters = Array.isArray(encodingOptions.audioFilters) ? encodingOptions.audioFilters.filter(Boolean) : []
+    if (audioFilters.length) {
+      ffmpeg.outputOptions(['-af', audioFilters.join(',')])
+      // loudnorm upsamples to 192 kHz internally; bring it back to a normal rate
+      if (audioFilters.some((f) => f.startsWith('loudnorm'))) ffmpeg.outputOptions(['-ar 44100'])
+    }
   } else {
     ffmpeg.outputOptions(['-max_muxing_queue_size 1000'])
 

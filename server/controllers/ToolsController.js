@@ -1,5 +1,6 @@
 const { Request, Response, NextFunction } = require('express')
 const Logger = require('../Logger')
+const audioProcessing = require('../utils/audioProcessing')
 const Database = require('../Database')
 
 /**
@@ -48,6 +49,15 @@ class ToolsController {
     }
 
     const options = req.query || {}
+    try {
+      // Fork: validate optional audio processing (normalize, compress, voiceEq, denoise, speed)
+      const processing = audioProcessing.parseAudioProcessingOptions(options)
+      if (options.codec === 'copy' && audioProcessing.hasAudioProcessing(processing)) {
+        return res.status(400).send('Audio processing needs re-encoding and cannot be used with the copy codec')
+      }
+    } catch (error) {
+      return res.status(400).send(error.message)
+    }
     Logger.info(`[ToolsController] encodeM4b: Starting audiobook merge for "${req.libraryItem.media.title}" with options: ${JSON.stringify(options)}`)
     this.abMergeManager.startAudiobookMerge(req.user.id, req.libraryItem, options)
 

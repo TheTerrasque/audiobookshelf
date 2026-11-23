@@ -100,14 +100,16 @@ class MediaVersionController {
     if (kind !== 'audio') return res.status(400).send('Unsupported version kind')
 
     const versionId = req.body?.versionId || null
+    let timeScale = 1
     if (versionId) {
       const version = await Database.mediaVersionModel.findByPk(versionId)
       if (!version || version.libraryItemId !== libraryItem.id || version.kind !== kind) {
         return res.status(404).send('Version not found')
       }
+      timeScale = mediaVersions.getVersionTimeScale(version)
     }
 
-    await mediaVersions.setSelection(req.user, libraryItem.id, kind, versionId)
+    await mediaVersions.setSelection(req.user, libraryItem.id, kind, versionId, timeScale)
     SocketAuthority.clientEmitter(req.user.id, 'user_updated', req.user.toOldJSONForBrowser())
     res.json({ selected: { audio: mediaVersions.getSelectedAudioVersionId(req.user, libraryItem.id) } })
   }

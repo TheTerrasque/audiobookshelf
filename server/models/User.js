@@ -619,11 +619,12 @@ class User extends Model {
       // TODO: Temporary flag not saved in db that is set in Auth.js jwtAuthCheck
       // Necessary to detect apps using old tokens that no longer match the old token stored on the user
       isOldToken: this.isOldToken,
-      mediaProgress: this.mediaProgresses?.map((mp) => mp.getOldMediaProgress()) || [],
+      mediaProgress: this.mediaProgresses?.map((mp) => require('../utils/mediaVersions').progressJsonForUser(this, mp.getOldMediaProgress())) || [],
       seriesHideFromContinueListening: [...seriesHideFromContinueListening],
       // Fork: chosen file version per library item, { [libraryItemId]: { audio?: versionId } }
       mediaVersionSelections: structuredClone(this.extraData?.mediaVersions || {}),
-      bookmarks: this.bookmarks?.map((b) => ({ ...b })) || [],
+      // Fork: positions on the user's selected version timeline (stored on the original)
+      bookmarks: this.bookmarks?.map((b) => require('../utils/mediaVersions').bookmarkForUser(this, b)) || [],
       isActive: this.isActive,
       isLocked: this.isLocked,
       lastSeen: this.lastSeen?.valueOf() || null,
@@ -872,7 +873,8 @@ class User extends Model {
    * @returns {AudioBookmarkObject|null}
    */
   findBookmark(libraryItemId, time) {
-    return this.bookmarks.find((bm) => bm.libraryItemId === libraryItemId && bm.time == time)
+    // Fork: tolerance, since times may be mapped through a version's time scale
+    return this.bookmarks.find((bm) => bm.libraryItemId === libraryItemId && (bm.time == time || Math.abs(Number(bm.time) - Number(time)) < 0.001))
   }
 
   /**
@@ -935,11 +937,12 @@ class User extends Model {
    * @returns {Promise<boolean>} - true if bookmark was removed
    */
   async removeBookmark(libraryItemId, time) {
-    if (!this.findBookmark(libraryItemId, time)) {
+    const bookmark = this.findBookmark(libraryItemId, time)
+    if (!bookmark) {
       Logger.error(`[User] removeBookmark not found`)
       return false
     }
-    this.bookmarks = this.bookmarks.filter((bm) => bm.libraryItemId !== libraryItemId || bm.time !== time)
+    this.bookmarks = this.bookmarks.filter((bm) => bm !== bookmark)
     this.changed('bookmarks', true)
     await this.save()
     return true

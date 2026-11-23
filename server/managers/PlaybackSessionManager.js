@@ -227,6 +227,17 @@ class PlaybackSessionManager {
       progressSynced: false
     }
 
+    // Fork: a downloaded copy may be a sped-up version; map its position to the original timeline
+    const localProgressObject = { ...session.mediaProgressObject }
+    if (!session.episodeId) {
+      const timeScale = await mediaVersions.resolveIncomingTimeScale(user, libraryItem, sessionJson.duration)
+      if (timeScale !== 1) {
+        localProgressObject.currentTime = (localProgressObject.currentTime || 0) / timeScale
+        localProgressObject.duration = libraryItem.media.duration || (localProgressObject.duration || 0) / timeScale
+        if (localProgressObject.duration > 0) localProgressObject.progress = Math.min(1, localProgressObject.currentTime / localProgressObject.duration)
+      }
+    }
+
     const mediaItemId = session.episodeId || libraryItem.media.id
     let userProgressForItem = user.getMediaProgress(mediaItemId)
     if (userProgressForItem) {
@@ -237,7 +248,7 @@ class PlaybackSessionManager {
         const updateResponse = await user.createUpdateMediaProgressFromPayload({
           libraryItemId: libraryItem.id,
           episodeId: session.episodeId,
-          ...session.mediaProgressObject,
+          ...localProgressObject,
           markAsFinishedPercentComplete: library.librarySettings.markAsFinishedPercentComplete,
           markAsFinishedTimeRemaining: library.librarySettings.markAsFinishedTimeRemaining
         })
@@ -251,7 +262,7 @@ class PlaybackSessionManager {
       const updateResponse = await user.createUpdateMediaProgressFromPayload({
         libraryItemId: libraryItem.id,
         episodeId: session.episodeId,
-        ...session.mediaProgressObject,
+        ...localProgressObject,
         markAsFinishedPercentComplete: library.librarySettings.markAsFinishedPercentComplete,
         markAsFinishedTimeRemaining: library.librarySettings.markAsFinishedTimeRemaining
       })
@@ -267,7 +278,7 @@ class PlaybackSessionManager {
         id: userProgressForItem.id,
         sessionId: session.id,
         deviceDescription: session.deviceDescription,
-        data: userProgressForItem.getOldMediaProgress()
+        data: mediaVersions.progressJsonForUser(user, userProgressForItem.getOldMediaProgress())
       })
     }
 
@@ -336,6 +347,9 @@ class PlaybackSessionManager {
         userStartTime = Number.parseFloat(userProgress.currentTime) || 0
       }
     }
+    // Fork: progress is stored on the original timeline; a sped-up version has its own
+    const sessionTimeScale = audioView?.timeScale || 1
+    userStartTime *= sessionTimeScale
     const newPlaybackSession = new PlaybackSession()
     newPlaybackSession.setData(libraryItem, user.id, mediaPlayer, deviceInfo, userStartTime, episodeId)
     if (audioView) {
@@ -343,6 +357,8 @@ class PlaybackSessionManager {
       newPlaybackSession.duration = audioView.duration
       newPlaybackSession.chapters = audioView.chapters
     }
+    // Not persisted; used by syncSession to map positions back to the original timeline
+    newPlaybackSession.timeScale = sessionTimeScale
 
     let audioTracks = []
     if (shouldDirectPlay) {
@@ -397,12 +413,13 @@ class PlaybackSessionManager {
     session.addListeningTime(syncData.timeListened)
     Logger.debug(`[PlaybackSessionManager] syncSession "${session.id}" (Device: ${session.deviceDescription}) | Total Time Listened: ${session.timeListening}`)
 
+    const timeScale = session.timeScale || 1
     const updateResponse = await user.createUpdateMediaProgressFromPayload({
       libraryItemId: libraryItem.id,
       episodeId: session.episodeId,
       // duration no longer required (v2.15.1) but used if available
-      duration: syncData.duration || session.duration || 0,
-      currentTime: syncData.currentTime,
+      duration: (syncData.duration || session.duration || 0) / timeScale,
+      currentTime: syncData.currentTime / timeScale,
       progress: session.progress,
       markAsFinishedTimeRemaining: library.librarySettings.markAsFinishedTimeRemaining,
       markAsFinishedPercentComplete: library.librarySettings.markAsFinishedPercentComplete
@@ -412,7 +429,7 @@ class PlaybackSessionManager {
         id: updateResponse.mediaProgress.id,
         sessionId: session.id,
         deviceDescription: session.deviceDescription,
-        data: updateResponse.mediaProgress.getOldMediaProgress()
+        data: mediaVersions.progressJsonForUser(user, updateResponse.mediaProgress.getOldMediaProgress())
       })
     }
     this.saveSession(session)
