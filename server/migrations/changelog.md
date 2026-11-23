@@ -17,3 +17,4 @@ Please add a record of every database migration that you create to this file. Th
 | v2.19.4        | v2.19.4-improve-podcast-queries              | Adds numEpisodes to podcasts, adds podcastId to mediaProgresses, copies podcast title to libraryItems         |
 | v2.20.0        | v2.20.0-improve-author-sort-queries          | Adds AuthorNames(FirstLast\|LastFirst) to libraryItems to improve author sort queries                         |
 | v2.38.1        | v2.38.1-add-ebook-file-ino-to-media-progress | Adds ebookFileIno to mediaProgresses so comic progress remembers which ebook file it belongs to               |
+| v2.38.2        | v2.38.2-add-media-versions                   | Adds the mediaVersions table for alternative copies of an item's files (e.g. m4b re-encodes) stored outside library folders |

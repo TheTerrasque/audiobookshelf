@@ -13,7 +13,7 @@ const hlsPlaylistGenerator = require('../utils/generators/hlsPlaylistGenerator')
 const AudioTrack = require('./files/AudioTrack')
 
 class Stream extends EventEmitter {
-  constructor(sessionId, streamPath, user, libraryItem, episodeId, startTime, transcodeOptions = {}) {
+  constructor(sessionId, streamPath, user, libraryItem, episodeId, startTime, transcodeOptions = {}, audioView = null) {
     super()
 
     this.id = sessionId
@@ -21,6 +21,8 @@ class Stream extends EventEmitter {
     /** @type {import('../models/LibraryItem')} */
     this.libraryItem = libraryItem
     this.episodeId = episodeId
+    /** Fork: the user's selected file version (see utils/mediaVersions getAudioView), null = original files */
+    this.audioView = audioView
 
     this.transcodeOptions = transcodeOptions
 
@@ -52,9 +54,11 @@ class Stream extends EventEmitter {
     return this.libraryItem.media.getPlaybackTitle(this.episodeId)
   }
   get totalDuration() {
+    if (this.audioView) return this.audioView.duration
     return this.libraryItem.media.getPlaybackDuration(this.episodeId)
   }
   get tracks() {
+    if (this.audioView) return this.audioView.tracks
     return this.libraryItem.getTrackList(this.episodeId)
   }
   get tracksAudioFileType() {

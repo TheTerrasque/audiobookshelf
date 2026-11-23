@@ -303,7 +303,7 @@ export default {
     if (!store.getters['user/getUserCanUpdate']) {
       return redirect('/?error=unauthorized')
     }
-    var libraryItem = await app.$axios.$get(`/api/items/${params.id}?expanded=1`).catch((error) => {
+    var libraryItem = await app.$axios.$get(`/api/items/${params.id}?expanded=1&originalFiles=1`).catch((error) => {
       console.error('Failed', error)
       return false
     })
@@ -989,7 +989,7 @@ export default {
     },
     reloadLibraryItem() {
       this.$axios
-        .$get(`/api/items/${this.libraryItem.id}?expanded=1`)
+        .$get(`/api/items/${this.libraryItem.id}?expanded=1&originalFiles=1`)
         .then((data) => {
           this.libraryItem = data
           this.initChapters()

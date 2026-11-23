@@ -6,11 +6,13 @@ const ffmpegHelpers = require('../utils/ffmpegHelpers')
 const TaskManager = require('./TaskManager')
 const Task = require('../objects/Task')
 const fileUtils = require('../utils/fileUtils')
+const Database = require('../Database')
+const mediaVersions = require('../utils/mediaVersions')
 
 /**
  * @typedef UpdateMetadataOptions
  * @property {boolean} [forceEmbedChapters=false] - Whether to force embed chapters.
- * @property {boolean} [backup=false] - Whether to backup the files.
+ * @property {string} [label] - name of the new file version (fork; originals are never modified)
  */
 
 class AudioMetadataMangaer {
@@ -63,7 +65,6 @@ class AudioMetadataMangaer {
    */
   async updateMetadataForItem(userId, libraryItem, options = {}) {
     const forceEmbedChapters = !!options.forceEmbedChapters
-    const backupFiles = !!options.backup
 
     const audioFiles = libraryItem.media.includedAudioFiles
 
@@ -77,6 +78,10 @@ class AudioMetadataMangaer {
     let mimeType = audioFiles[0].mimeType
     if (audioFiles.some((a) => a.mimeType !== mimeType)) mimeType = null
 
+    // Fork: tagged copies go into a new file version outside the library folder; originals are never touched
+    const versionLabel = (typeof options.label === 'string' && options.label.trim()) || mediaVersions.defaultVersionLabel('tagged')
+    const versionDir = await mediaVersions.getNewVersionDir(libraryItem, versionLabel)
+
     // Create task
     const libraryItemDir = libraryItem.isFile ? Path.dirname(libraryItem.path) : libraryItem.path
     const taskData = {
@@ -88,17 +93,18 @@ class AudioMetadataMangaer {
         ino: af.ino,
         filename: af.metadata.filename,
         path: af.metadata.path,
-        cachePath: Path.join(itemCachePath, af.metadata.filename),
+        versionPath: Path.join(versionDir, af.metadata.filename),
         duration: af.duration
       })),
       coverPath: libraryItem.media.coverPath,
       metadataObject: ffmpegHelpers.getFFMetadataObject(libraryItem, audioFiles.length),
       itemCachePath,
+      versionDir,
+      versionLabel,
       chapters,
       mimeType,
       options: {
-        forceEmbedChapters,
-        backupFiles
+        forceEmbedChapters
       },
       duration: libraryItem.media.duration
     }
@@ -127,6 +133,22 @@ class AudioMetadataMangaer {
   }
 
   /**
+   * Fail a task, removing its partially written version directory.
+   *
+   * @param {import('../objects/Task')} task
+   * @param {{text: string, key: string, subs?: string[]}} failedString
+   */
+  async failTask(task, failedString) {
+    task.setFailed(failedString)
+    if (task.data.versionDir && !task.data.versionId) {
+      await fs.remove(task.data.versionDir).catch((err) => {
+        Logger.error(`[AudioMetadataManager] Failed to remove version directory "${task.data.versionDir}"`, err)
+      })
+    }
+    this.handleTaskFinished(task)
+  }
+
+  /**
    *
    * @param {import('../objects/Task')} task
    */
@@ -136,70 +158,51 @@ class AudioMetadataMangaer {
 
     Logger.info(`[AudioMetadataManager] Starting metadata embed task`, task.description)
 
-    // Ensure target directory is writable
-    const targetDirWritable = await fileUtils.isWritable(task.data.libraryItemDir)
-    Logger.debug(`[AudioMetadataManager] Target directory ${task.data.libraryItemDir} writable: ${targetDirWritable}`)
-    if (!targetDirWritable) {
-      Logger.error(`[AudioMetadataManager] Target directory is not writable: ${task.data.libraryItemDir}`)
-      const taskFailedString = {
+    // Ensure the version directory can be created and written (the library folder may be read-only)
+    const versionDirReady = await fs
+      .mkdirp(task.data.versionDir)
+      .then(() => fileUtils.isWritable(task.data.versionDir))
+      .catch(() => false)
+    if (!versionDirReady) {
+      Logger.error(`[AudioMetadataManager] Version directory is not writable: ${task.data.versionDir}`)
+      return this.failTask(task, {
         text: 'Target directory is not writable',
         key: 'MessageTaskTargetDirectoryNotWritable'
-      }
-      task.setFailed(taskFailedString)
-      this.handleTaskFinished(task)
-      return
+      })
     }
 
-    // Ensure target audio files are writable
-    for (const af of task.data.audioFiles) {
-      try {
-        await fs.access(af.path, fs.constants.W_OK)
-      } catch (err) {
-        Logger.error(`[AudioMetadataManager] Audio file is not writable: ${af.path}`)
-        const taskFailedString = {
-          text: `Audio file "${Path.basename(af.path)}" is not writable`,
-          key: 'MessageTaskAudioFileNotWritable',
-          subs: [Path.basename(af.path)]
-        }
-        task.setFailed(taskFailedString)
-        this.handleTaskFinished(task)
-        return
-      }
-    }
-
-    // Ensure item cache dir exists
+    // Ensure item cache dir exists (holds the ffmetadata file)
+    const ffmetadataPath = Path.join(task.data.itemCachePath, 'ffmetadata.txt')
     let cacheDirCreated = false
     if (!(await fs.pathExists(task.data.itemCachePath))) {
       try {
-        await fs.mkdir(task.data.itemCachePath)
+        await fs.mkdirp(task.data.itemCachePath)
         cacheDirCreated = true
       } catch (err) {
         Logger.error(`[AudioMetadataManager] Failed to create cache directory ${task.data.itemCachePath}`, err)
-        const taskFailedString = {
+        return this.failTask(task, {
           text: 'Failed to create cache directory',
           key: 'MessageTaskFailedToCreateCacheDirectory'
-        }
-        task.setFailed(taskFailedString)
-        this.handleTaskFinished(task)
-        return
+        })
       }
+    }
+    const cleanupCache = async () => {
+      if (cacheDirCreated) await fs.remove(task.data.itemCachePath).catch(() => {})
+      else await fs.remove(ffmetadataPath).catch(() => {})
     }
 
     // Create ffmetadata file
-    const ffmetadataPath = Path.join(task.data.itemCachePath, 'ffmetadata.txt')
     const success = await ffmpegHelpers.writeFFMetadataFile(task.data.metadataObject, task.data.chapters, ffmetadataPath)
     if (!success) {
       Logger.error(`[AudioMetadataManager] Failed to write ffmetadata file for audiobook "${task.data.libraryItemId}"`)
-      const taskFailedString = {
+      await cleanupCache()
+      return this.failTask(task, {
         text: 'Failed to write metadata file',
         key: 'MessageTaskFailedToWriteMetadataFile'
-      }
-      task.setFailed(taskFailedString)
-      this.handleTaskFinished(task)
-      return
+      })
     }
 
-    // Tag audio files
+    // Copy each audio file into the version directory and tag the copy
     let cummulativeProgress = 0
     for (const af of task.data.audioFiles) {
       const audioFileRelativeDuration = af.duration / task.data.duration
@@ -208,41 +211,21 @@ class AudioMetadataMangaer {
         ino: af.ino
       })
 
-      // Backup audio file
-      if (task.data.options.backupFiles) {
-        try {
-          const backupFilePath = Path.join(task.data.itemCachePath, af.filename)
-          await fs.copy(af.path, backupFilePath)
-          Logger.debug(`[AudioMetadataManager] Backed up audio file at "${backupFilePath}"`)
-        } catch (err) {
-          Logger.error(`[AudioMetadataManager] Failed to backup audio file "${af.path}"`, err)
-          const taskFailedString = {
-            text: `Failed to backup audio file "${Path.basename(af.path)}"`,
-            key: 'MessageTaskFailedToBackupAudioFile',
-            subs: [Path.basename(af.path)]
-          }
-          task.setFailed(taskFailedString)
-          this.handleTaskFinished(task)
-          return
-        }
-      }
-
       try {
-        await ffmpegHelpers.addCoverAndMetadataToFile(af.path, task.data.coverPath, ffmetadataPath, af.index, task.data.mimeType, (progress) => {
+        await fs.copy(af.path, af.versionPath)
+        await ffmpegHelpers.addCoverAndMetadataToFile(af.versionPath, task.data.coverPath, ffmetadataPath, af.index, task.data.mimeType, (progress) => {
           SocketAuthority.adminEmitter('task_progress', { libraryItemId: task.data.libraryItemId, progress: cummulativeProgress + progress * audioFileRelativeDuration })
           SocketAuthority.adminEmitter('track_progress', { libraryItemId: task.data.libraryItemId, ino: af.ino, progress })
         })
-        Logger.info(`[AudioMetadataManager] Successfully tagged audio file "${af.path}"`)
+        Logger.info(`[AudioMetadataManager] Successfully tagged audio file copy "${af.versionPath}"`)
       } catch (err) {
-        Logger.error(`[AudioMetadataManager] Failed to tag audio file "${af.path}"`, err)
-        const taskFailedString = {
+        Logger.error(`[AudioMetadataManager] Failed to tag audio file copy "${af.versionPath}"`, err)
+        await cleanupCache()
+        return this.failTask(task, {
           text: `Failed to embed metadata in file "${Path.basename(af.path)}"`,
           key: 'MessageTaskFailedToEmbedMetadataInFile',
           subs: [Path.basename(af.path)]
-        }
-        task.setFailed(taskFailedString)
-        this.handleTaskFinished(task)
-        return
+        })
       }
 
       SocketAuthority.adminEmitter('track_finished', {
@@ -253,14 +236,29 @@ class AudioMetadataMangaer {
       cummulativeProgress += audioFileRelativeDuration * 100
     }
 
-    // Remove temp cache file/folder if not backing up
-    if (!task.data.options.backupFiles) {
-      // If cache dir was created from this then remove it
-      if (cacheDirCreated) {
-        await fs.remove(task.data.itemCachePath)
-      } else {
-        await fs.remove(ffmetadataPath)
-      }
+    await cleanupCache()
+
+    // Register the tagged copies as a new file version
+    try {
+      const libraryItem = await Database.libraryItemModel.getExpandedById(task.data.libraryItemId)
+      if (!libraryItem) throw new Error('Library item no longer exists')
+      const version = await mediaVersions.createAudioVersion({
+        libraryItem,
+        dirPath: task.data.versionDir,
+        filePaths: task.data.audioFiles.map((af) => af.versionPath),
+        label: task.data.versionLabel,
+        tool: 'embed-metadata',
+        options: { ...task.data.options }
+      })
+      task.data.versionId = version.id
+      SocketAuthority.emitter('item_versions_updated', { libraryItemId: libraryItem.id })
+      Logger.info(`[AudioMetadataManager] Created version "${version.label}" (${version.id}) at "${task.data.versionDir}"`)
+    } catch (err) {
+      Logger.error(`[AudioMetadataManager] Failed to register version for "${task.data.libraryItemId}"`, err)
+      return this.failTask(task, {
+        text: 'Failed to write metadata file',
+        key: 'MessageTaskFailedToWriteMetadataFile'
+      })
     }
 
     task.setFinished()

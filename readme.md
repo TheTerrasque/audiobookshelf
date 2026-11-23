@@ -30,10 +30,14 @@
 >   - Reading progress remembers which file you were in (`mediaProgresses.ebookFileIno`, added by migration `v2.38.1`).
 > - **Format filter** in the library view (audiobook / ebook / comic).
 > - **Legacy fix.** Older records with an empty `ebookFormat` fall back to the file extension, so they still open as comics.
+> - **File versions** (branch `feat/media-versions`). The M4B encoder and "embed metadata" no longer touch library files, so library folders can be mounted read-only.
+>   - Their output is saved as a new *version* under `VERSIONS_PATH`, which mirrors the library layout, e.g. `/versions/<library>/<author>/<book>/<version name>/`. Each version folder has a `version.json`.
+>   - Each user picks which version they play on the item page; streaming, transcoding, downloads and the mobile app all follow that choice.
+>   - Set `VERSIONS_PATH=/versions` and mount a writable volume there; without it, versions go to `<METADATA_PATH>/versions`.
 >
 > The matching Android app fork, which reads comics through the same page API, is at [TheTerrasque/audiobookshelf-app](https://github.com/TheTerrasque/audiobookshelf-app).
 >
-> The database migration only adds a column, but this is still a one-way step: going back to official releases is untested.
+> The database migrations only add a column and a table, but this is still a one-way step: going back to official releases is untested.
 
 # About
 

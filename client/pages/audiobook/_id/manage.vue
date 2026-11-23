@@ -74,7 +74,7 @@
       </widgets-alert>
       <!-- metadata embed action buttons -->
       <div v-else-if="isEmbedTool" class="w-full flex justify-end items-center mb-4">
-        <ui-checkbox v-if="!isTaskFinished" v-model="shouldBackupAudioFiles" :disabled="processing" :label="$strings.LabelBackupAudioFiles" medium checkbox-bg="bg" label-class="pl-2 text-base md:text-lg" @input="toggleBackupAudioFiles" />
+        <ui-text-input v-if="!isTaskFinished" v-model="versionLabel" :disabled="processing" :placeholder="$strings.LabelVersionName" class="w-64 max-w-full" />
 
         <div class="grow" />
 
@@ -84,6 +84,7 @@
       </div>
       <!-- m4b embed action buttons -->
       <div v-else class="w-full flex items-center mb-4">
+        <ui-text-input v-if="!isTaskFinished" v-model="versionLabel" :disabled="processing" :placeholder="$strings.LabelVersionName" class="w-64 max-w-full" />
         <div class="grow" />
 
         <ui-btn v-if="!isTaskFinished && processing" color="bg-error" :loading="isCancelingEncode" class="mr-2" @click.stop="cancelEncodeClick">{{ $strings.ButtonCancelEncode }}</ui-btn>
@@ -107,20 +108,11 @@
       <div class="mb-4">
         <div v-if="isEmbedTool" class="flex items-start mb-2">
           <span class="material-symbols text-base text-warning pt-1">star</span>
-          <p class="text-gray-200 ml-2">{{ $strings.LabelEncodingInfoEmbedded }}</p>
+          <p class="text-gray-200 ml-2">{{ $strings.LabelEncodingInfoEmbeddedVersion }}</p>
         </div>
         <div v-else class="flex items-start mb-2">
           <span class="material-symbols text-base text-warning pt-1">star</span>
-          <p class="text-gray-200 ml-2">
-            {{ $strings.LabelEncodingFinishedM4B }} <span class="rounded-md bg-neutral-600 text-sm text-white py-0.5 px-1 font-mono">.../{{ libraryItemRelPath }}/</span>.
-          </p>
-        </div>
-
-        <div v-if="shouldBackupAudioFiles || isM4BTool" class="flex items-start mb-2">
-          <span class="material-symbols text-base text-warning pt-1">star</span>
-          <p class="text-gray-200 ml-2">
-            {{ $strings.LabelEncodingBackupLocation }} <span class="rounded-md bg-neutral-600 text-sm text-white py-0.5 px-1 font-mono">/metadata/cache/items/{{ libraryItemId }}/</span>. {{ $strings.LabelEncodingClearItemCache }}
-          </p>
+          <p class="text-gray-200 ml-2">{{ $strings.LabelEncodingFinishedM4BVersion }}</p>
         </div>
         <div v-if="isEmbedTool && audioFiles.length > 1" class="flex items-start mb-2">
           <span class="material-symbols text-base text-warning pt-1">star</span>
@@ -129,10 +121,6 @@
         <div v-if="isM4BTool" class="flex items-start mb-2">
           <span class="material-symbols text-base text-warning pt-1">star</span>
           <p class="text-gray-200 ml-2">{{ $strings.LabelEncodingTimeWarning }}</p>
-        </div>
-        <div v-if="isM4BTool" class="flex items-start mb-2">
-          <span class="material-symbols text-base text-warning pt-1">star</span>
-          <p class="text-gray-200 ml-2">{{ $strings.LabelEncodingWatcherDisabled }}</p>
         </div>
         <div class="flex items-start mb-2">
           <span class="material-symbols text-base text-warning pt-1">star</span>
@@ -193,7 +181,7 @@ export default {
     if (!store.getters['user/getIsAdminOrUp']) {
       return redirect('/?error=unauthorized')
     }
-    const libraryItem = await app.$axios.$get(`/api/items/${params.id}?expanded=1`).catch((error) => {
+    const libraryItem = await app.$axios.$get(`/api/items/${params.id}?expanded=1&originalFiles=1`).catch((error) => {
       console.error('Failed', error)
       return false
     })
@@ -225,7 +213,7 @@ export default {
       metadataObject: null,
       selectedTool: 'embed',
       isCancelingEncode: false,
-      shouldBackupAudioFiles: true,
+      versionLabel: '',
       encodingOptions: {
         bitrate: '128k',
         channels: '2',
@@ -322,9 +310,6 @@ export default {
     }
   },
   methods: {
-    toggleBackupAudioFiles(val) {
-      localStorage.setItem('embedMetadataShouldBackup', val ? 1 : 0)
-    },
     bitrateChanged(val) {
       localStorage.setItem('embedMetadataBitrate', val)
     },
@@ -359,6 +344,7 @@ export default {
       this.encodingOptions = encodeOptions
 
       const queryParams = new URLSearchParams(encodeOptions)
+      if (this.versionLabel.trim()) queryParams.set('label', this.versionLabel.trim())
 
       this.processing = true
       this.$axios
@@ -374,7 +360,7 @@ export default {
     },
     embedClick() {
       const payload = {
-        message: this.$getString('MessageConfirmEmbedMetadataInAudioFiles', [this.audioFiles.length]),
+        message: this.$getString('MessageConfirmEmbedMetadataInAudioFilesVersion', [this.audioFiles.length]),
         callback: (confirmed) => {
           if (confirmed) {
             this.updateAudioFileMetadata()
@@ -387,7 +373,7 @@ export default {
     updateAudioFileMetadata() {
       this.processing = true
       this.$axios
-        .$post(`/api/tools/item/${this.libraryItemId}/embed-metadata?backup=${this.shouldBackupAudioFiles ? 1 : 0}`)
+        .$post(`/api/tools/item/${this.libraryItemId}/embed-metadata${this.versionLabel.trim() ? `?label=${encodeURIComponent(this.versionLabel.trim())}` : ''}`)
         .then(() => {
           console.log('Audio metadata encode started')
         })
@@ -412,8 +398,6 @@ export default {
 
       if (this.task) this.taskUpdated(this.task)
 
-      const shouldBackupAudioFiles = localStorage.getItem('embedMetadataShouldBackup')
-      this.shouldBackupAudioFiles = shouldBackupAudioFiles != 0
 
       if (this.encodeTaskHasEncodingOptions) {
         if (this.encodeTask.data.encodeOptions.bitrate) this.encodingOptions.bitrate = this.encodeTask.data.encodeOptions.bitrate

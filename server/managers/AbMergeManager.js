@@ -6,7 +6,8 @@ const Task = require('../objects/Task')
 const ffmpegHelpers = require('../utils/ffmpegHelpers')
 const Ffmpeg = require('../libs/fluentFfmpeg')
 const SocketAuthority = require('../SocketAuthority')
-const { isWritable, copyToExisting } = require('../utils/fileUtils')
+const { isWritable } = require('../utils/fileUtils')
+const mediaVersions = require('../utils/mediaVersions')
 const TrackProgressMonitor = require('../objects/TrackProgressMonitor')
 
 /**
@@ -14,6 +15,7 @@ const TrackProgressMonitor = require('../objects/TrackProgressMonitor')
  * @property {string} codec
  * @property {string} channels
  * @property {string} bitrate
+ * @property {string} [label] - name of the new file version (fork)
  */
 
 class AbMergeManager {
@@ -57,6 +59,12 @@ class AbMergeManager {
   async startAudiobookMerge(userId, libraryItem, options = {}) {
     const task = new Task()
 
+    // Fork: the m4b becomes a new file version outside the library folder; originals are never touched
+    const { label: requestedLabel, ...encodeOptions } = options || {}
+    options = encodeOptions
+    const versionLabel = (typeof requestedLabel === 'string' && requestedLabel.trim()) || mediaVersions.defaultVersionLabel(['m4b', options.bitrate].filter(Boolean).join(' '))
+    const versionDir = await mediaVersions.getNewVersionDir(libraryItem, versionLabel)
+
     const audiobookBaseName = libraryItem.isFile ? Path.basename(libraryItem.path, Path.extname(libraryItem.path)) : Path.basename(libraryItem.path)
     const targetFilename = audiobookBaseName + '.m4b'
     const itemCachePath = Path.join(this.itemsCacheDir, libraryItem.id)
@@ -67,11 +75,12 @@ class AbMergeManager {
       libraryItemId: libraryItem.id,
       libraryItemDir,
       userId,
-      originalTrackPaths: libraryItem.media.includedAudioFiles.map((t) => t.metadata.path),
       inos: libraryItem.media.includedAudioFiles.map((f) => f.ino),
       tempFilepath,
       targetFilename,
-      targetFilepath: Path.join(libraryItemDir, targetFilename),
+      targetFilepath: Path.join(versionDir, targetFilename),
+      versionDir,
+      versionLabel,
       itemCachePath,
       ffmetadataObject: ffmpegHelpers.getFFMetadataObject(libraryItem, 1),
       chapters: libraryItem.media.chapters?.map((c) => ({ ...c })),
@@ -108,9 +117,13 @@ class AbMergeManager {
    * @param {AbMergeEncodeOptions} encodingOptions
    */
   async runAudiobookMerge(libraryItem, task, encodingOptions) {
-    // Make sure the target directory is writable
-    if (!(await isWritable(task.data.libraryItemDir))) {
-      Logger.error(`[AbMergeManager] Target directory is not writable: ${task.data.libraryItemDir}`)
+    // Make sure the version directory can be created and written (the library folder itself may be read-only)
+    const versionDirReady = await fs
+      .mkdirp(task.data.versionDir)
+      .then(() => isWritable(task.data.versionDir))
+      .catch(() => false)
+    if (!versionDirReady) {
+      Logger.error(`[AbMergeManager] Version directory is not writable: ${task.data.versionDir}`)
       const taskFailedString = {
         text: 'Target directory is not writable',
         key: 'MessageTaskTargetDirectoryNotWritable'
@@ -200,40 +213,24 @@ class AbMergeManager {
       return
     }
 
-    // Move library item tracks to cache
-    for (const [index, trackPath] of task.data.originalTrackPaths.entries()) {
-      const trackFilename = Path.basename(trackPath)
-      let moveToPath = Path.join(task.data.itemCachePath, trackFilename)
-
-      // If the track is the same as the temp file, we need to rename it to avoid overwriting it
-      if (task.data.tempFilepath === moveToPath) {
-        const trackExtname = Path.extname(task.data.tempFilepath)
-        const newTrackFilename = Path.basename(task.data.tempFilepath, trackExtname) + '.backup' + trackExtname
-        moveToPath = Path.join(task.data.itemCachePath, newTrackFilename)
-      }
-
-      Logger.debug(`[AbMergeManager] Backing up original track "${trackPath}" to ${moveToPath}`)
-      if (index === 0) {
-        // copy the first track to the cache directory
-        await fs.copy(trackPath, moveToPath).catch((err) => {
-          Logger.error(`[AbMergeManager] Failed to copy track "${trackPath}" to "${moveToPath}"`, err)
-        })
-      } else {
-        // move the rest of the tracks to the cache directory
-        await fs.move(trackPath, moveToPath, { overwrite: true }).catch((err) => {
-          Logger.error(`[AbMergeManager] Failed to move track "${trackPath}" to "${moveToPath}"`, err)
-        })
-      }
-    }
-
-    // Move m4b to target, preserving the original track's permissions
+    // Move the m4b into the version directory and register it as a new file version
     Logger.debug(`[AbMergeManager] Moving m4b from ${task.data.tempFilepath} to ${task.data.targetFilepath}`)
     try {
-      await copyToExisting(task.data.tempFilepath, task.data.originalTrackPaths[0])
-      await fs.rename(task.data.originalTrackPaths[0], task.data.targetFilepath)
-      await fs.remove(task.data.tempFilepath)
+      await fs.move(task.data.tempFilepath, task.data.targetFilepath, { overwrite: false })
+      const version = await mediaVersions.createAudioVersion({
+        libraryItem,
+        dirPath: task.data.versionDir,
+        filePaths: [task.data.targetFilepath],
+        label: task.data.versionLabel,
+        tool: 'encode-m4b',
+        options: { ...encodingOptions },
+        chapters: task.data.chapters
+      })
+      task.data.versionId = version.id
+      SocketAuthority.emitter('item_versions_updated', { libraryItemId: libraryItem.id })
+      Logger.info(`[AbMergeManager] Created version "${version.label}" (${version.id}) at "${task.data.versionDir}"`)
     } catch (err) {
-      Logger.error(`[AbMergeManager] Failed to move m4b from ${task.data.tempFilepath} to ${task.data.targetFilepath}`, err)
+      Logger.error(`[AbMergeManager] Failed to create version from m4b "${task.data.tempFilepath}"`, err)
       const taskFailedString = {
         text: 'Failed to move m4b file',
         key: 'MessageTaskFailedToMoveM4bFile'
@@ -272,6 +269,12 @@ class AbMergeManager {
     }
 
     if (removeTempFilepath) {
+      // Fork: remove the version directory of a failed/canceled encode (only if no version was registered)
+      if (task.data.versionDir && !task.data.versionId) {
+        await fs.remove(task.data.versionDir).catch((err) => {
+          Logger.error('[AbMergeManager] Failed to remove version directory', err)
+        })
+      }
       // On failed tasks remove the bad file if it exists
       if (await fs.pathExists(task.data.tempFilepath)) {
         await fs

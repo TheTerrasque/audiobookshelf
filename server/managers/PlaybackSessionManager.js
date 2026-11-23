@@ -11,6 +11,7 @@ const uaParserJs = require('../libs/uaParser')
 const requestIp = require('../libs/requestIp')
 
 const { PlayMethod } = require('../utils/constants')
+const mediaVersions = require('../utils/mediaVersions')
 
 const PlaybackSession = require('../objects/PlaybackSession')
 const DeviceInfo = require('../objects/DeviceInfo')
@@ -318,7 +319,10 @@ class PlaybackSessionManager {
       await this.closeSession(user, session, null)
     }
 
-    const shouldDirectPlay = options.forceDirectPlay || (!options.forceTranscode && libraryItem.media.checkCanDirectPlay(options.supportedMimeTypes, episodeId))
+    // Fork: the user may have picked an alternative file version (e.g. an m4b re-encode)
+    const audioView = episodeId ? null : await mediaVersions.getAudioView(user, libraryItem)
+
+    const shouldDirectPlay = options.forceDirectPlay || (!options.forceTranscode && libraryItem.media.checkCanDirectPlay(options.supportedMimeTypes, episodeId, audioView?.audioFiles))
     const mediaPlayer = options.mediaPlayer || 'unknown'
 
     const mediaItemId = episodeId || libraryItem.media.id
@@ -334,15 +338,20 @@ class PlaybackSessionManager {
     }
     const newPlaybackSession = new PlaybackSession()
     newPlaybackSession.setData(libraryItem, user.id, mediaPlayer, deviceInfo, userStartTime, episodeId)
+    if (audioView) {
+      Logger.debug(`[PlaybackSessionManager] "${user.username}" plays version "${audioView.version.label}" (${audioView.version.id}) of item "${libraryItem.id}"`)
+      newPlaybackSession.duration = audioView.duration
+      newPlaybackSession.chapters = audioView.chapters
+    }
 
     let audioTracks = []
     if (shouldDirectPlay) {
       Logger.debug(`[PlaybackSessionManager] "${user.username}" starting direct play session for item "${libraryItem.id}" with id ${newPlaybackSession.id} (Device: ${newPlaybackSession.deviceDescription})`)
-      audioTracks = libraryItem.getTrackList(episodeId)
+      audioTracks = audioView ? audioView.tracks : libraryItem.getTrackList(episodeId)
       newPlaybackSession.playMethod = PlayMethod.DIRECTPLAY
     } else {
       Logger.debug(`[PlaybackSessionManager] "${user.username}" starting stream session for item "${libraryItem.id}" (Device: ${newPlaybackSession.deviceDescription})`)
-      const stream = new Stream(newPlaybackSession.id, this.StreamsPath, user, libraryItem, episodeId, userStartTime)
+      const stream = new Stream(newPlaybackSession.id, this.StreamsPath, user, libraryItem, episodeId, userStartTime, {}, audioView)
       await stream.generatePlaylist()
       stream.start() // Start transcode
 

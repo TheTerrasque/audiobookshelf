@@ -94,7 +94,7 @@ class ToolsController {
 
     const options = {
       forceEmbedChapters: req.query.forceEmbedChapters === '1',
-      backup: req.query.backup === '1'
+      label: typeof req.query.label === 'string' ? req.query.label : undefined
     }
     this.audioMetadataManager.updateMetadataForItem(req.user.id, req.libraryItem, options)
     res.sendStatus(200)
@@ -144,7 +144,7 @@ class ToolsController {
 
     const options = {
       forceEmbedChapters: req.query.forceEmbedChapters === '1',
-      backup: req.query.backup === '1'
+      label: typeof req.query.label === 'string' ? req.query.label : undefined
     }
     this.audioMetadataManager.handleBatchEmbed(req.user.id, libraryItems, options)
     res.sendStatus(200)

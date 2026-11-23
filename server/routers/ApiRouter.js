@@ -18,6 +18,7 @@ const UserController = require('../controllers/UserController')
 const CollectionController = require('../controllers/CollectionController')
 const PlaylistController = require('../controllers/PlaylistController')
 const MeController = require('../controllers/MeController')
+const MediaVersionController = require('../controllers/MediaVersionController')
 const BackupController = require('../controllers/BackupController')
 const LibraryItemController = require('../controllers/LibraryItemController')
 const SeriesController = require('../controllers/SeriesController')
@@ -130,6 +131,9 @@ class ApiRouter {
     this.router.get('/items/:id/ebook/:fileid?', LibraryItemController.middleware.bind(this), LibraryItemController.getEBookFile.bind(this))
     this.router.patch('/items/:id/ebook/:fileid/status', LibraryItemController.middleware.bind(this), LibraryItemController.updateEbookFileStatus.bind(this))
     this.router.patch('/items/:id/ebook', LibraryItemController.middleware.bind(this), LibraryItemController.updateEbookFiles.bind(this))
+    this.router.get('/items/:id/versions', LibraryItemController.middleware.bind(this), MediaVersionController.getVersions.bind(this))
+    this.router.patch('/items/:id/versions/:versionId', LibraryItemController.middleware.bind(this), MediaVersionController.updateVersion.bind(this))
+    this.router.delete('/items/:id/versions/:versionId', LibraryItemController.middleware.bind(this), MediaVersionController.deleteVersion.bind(this))
 
     //
     // User Routes
@@ -187,6 +191,7 @@ class ApiRouter {
     this.router.get('/me/progress/:id/:episodeId?', MeController.getMediaProgress.bind(this))
     this.router.patch('/me/progress/batch/update', MeController.batchUpdateMediaProgress.bind(this))
     this.router.patch('/me/progress/:libraryItemId/:episodeId?', MeController.createUpdateMediaProgress.bind(this))
+    this.router.patch('/me/item/:id/version', MediaVersionController.setUserVersion.bind(this))
     this.router.delete('/me/progress/:id', MeController.removeMediaProgress.bind(this))
     this.router.post('/me/item/:id/bookmark', MeController.createBookmark.bind(this))
     this.router.patch('/me/item/:id/bookmark', MeController.updateBookmark.bind(this))
@@ -400,6 +405,13 @@ class ApiRouter {
         Logger.info(`[ApiRouter] Removing item metadata at "${itemMetadataPath}"`)
         await fs.remove(itemMetadataPath)
       }
+    }
+
+    // Fork: drop file version records. Their folders under the versions path are kept on disk
+    // (an item record is also removed when its folder is renamed/moved, and re-encodes are expensive).
+    const versionCount = await Database.mediaVersionModel.destroy({ where: { libraryItemId } })
+    if (versionCount) {
+      Logger.info(`[ApiRouter] Removed ${versionCount} file version record(s) for item "${libraryItemId}" (files kept in "${global.VersionsPath}")`)
     }
 
     await Database.libraryItemModel.removeById(libraryItemId)

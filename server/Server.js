@@ -75,13 +75,14 @@ function getPreparedNextBasePath(nextApp) {
 }
 
 class Server {
-  constructor(SOURCE, PORT, HOST, CONFIG_PATH, METADATA_PATH, ROUTER_BASE_PATH) {
+  constructor(SOURCE, PORT, HOST, CONFIG_PATH, METADATA_PATH, ROUTER_BASE_PATH, VERSIONS_PATH) {
     this.Port = PORT
     this.Host = HOST
     global.Source = SOURCE
     global.isWin = process.platform === 'win32'
     global.ConfigPath = fileUtils.filePathToPOSIX(Path.normalize(CONFIG_PATH))
     global.MetadataPath = fileUtils.filePathToPOSIX(Path.normalize(METADATA_PATH))
+    global.VersionsPath = fileUtils.filePathToPOSIX(Path.normalize(VERSIONS_PATH || Path.join(METADATA_PATH, 'versions')))
     global.RouterBasePath = normalizeBasePath(ROUTER_BASE_PATH)
     global.XAccel = process.env.USE_X_ACCEL
     global.AllowCors = process.env.ALLOW_CORS === '1'
@@ -123,6 +124,9 @@ class Server {
     }
     if (!fs.pathExistsSync(global.MetadataPath)) {
       fs.mkdirSync(global.MetadataPath)
+    }
+    if (!fs.pathExistsSync(global.VersionsPath)) {
+      fs.mkdirpSync(global.VersionsPath)
     }
 
     this.auth = new Auth()
@@ -386,6 +390,7 @@ class Server {
       if (!payload.isInit) {
         payload.ConfigPath = global.ConfigPath
         payload.MetadataPath = global.MetadataPath
+        payload.VersionsPath = global.VersionsPath
       }
       res.json(payload)
     })

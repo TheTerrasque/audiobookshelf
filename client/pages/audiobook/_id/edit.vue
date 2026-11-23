@@ -87,7 +87,7 @@ export default {
     if (!store.getters['user/getUserCanUpdate']) {
       return redirect('/?error=unauthorized')
     }
-    var libraryItem = await app.$axios.$get(`/api/items/${params.id}?expanded=1`).catch((error) => {
+    var libraryItem = await app.$axios.$get(`/api/items/${params.id}?expanded=1&originalFiles=1`).catch((error) => {
       console.error('Failed', error)
       return false
     })

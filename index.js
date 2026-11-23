@@ -1,6 +1,7 @@
 const optionDefinitions = [
   { name: 'config', alias: 'c', type: String },
   { name: 'metadata', alias: 'm', type: String },
+  { name: 'versions', type: String },
   { name: 'port', alias: 'p', type: String },
   { name: 'host', alias: 'h', type: String },
   { name: 'source', alias: 's', type: String },
@@ -24,6 +25,7 @@ if (isDev || options['prod-with-dev-env']) {
   if (devEnv.Port) process.env.PORT = devEnv.Port
   if (devEnv.ConfigPath) process.env.CONFIG_PATH = devEnv.ConfigPath
   if (devEnv.MetadataPath) process.env.METADATA_PATH = devEnv.MetadataPath
+  if (devEnv.VersionsPath) process.env.VERSIONS_PATH = devEnv.VersionsPath
   if (devEnv.FFmpegPath) process.env.FFMPEG_PATH = devEnv.FFmpegPath
   if (devEnv.FFProbePath) process.env.FFPROBE_PATH = devEnv.FFProbePath
   if (devEnv.NunicodePath) process.env.NUSQLITE3_PATH = devEnv.NunicodePath
@@ -40,17 +42,20 @@ if (isDev || options['prod-with-dev-env']) {
 
 const inputConfig = options.config ? Path.resolve(options.config) : null
 const inputMetadata = options.metadata ? Path.resolve(options.metadata) : null
+const inputVersions = options.versions ? Path.resolve(options.versions) : null
 
 const PORT = options.port || process.env.PORT || 3333
 const HOST = options.host || process.env.HOST
 const CONFIG_PATH = inputConfig || process.env.CONFIG_PATH || Path.resolve('config')
 const METADATA_PATH = inputMetadata || process.env.METADATA_PATH || Path.resolve('metadata')
+// Fork: writable directory for file versions (e.g. m4b re-encodes); library folders are never written
+const VERSIONS_PATH = inputVersions || process.env.VERSIONS_PATH || Path.join(METADATA_PATH, 'versions')
 const SOURCE = options.source || process.env.SOURCE || 'debian'
 
 const ROUTER_BASE_PATH = process.env.ROUTER_BASE_PATH ?? '/audiobookshelf'
 
 console.log(`Running in ${process.env.NODE_ENV} mode.`)
-console.log(`Options: CONFIG_PATH=${CONFIG_PATH}, METADATA_PATH=${METADATA_PATH}, PORT=${PORT}, HOST=${HOST}, SOURCE=${SOURCE}, ROUTER_BASE_PATH=${ROUTER_BASE_PATH}`)
+console.log(`Options: CONFIG_PATH=${CONFIG_PATH}, METADATA_PATH=${METADATA_PATH}, VERSIONS_PATH=${VERSIONS_PATH}, PORT=${PORT}, HOST=${HOST}, SOURCE=${SOURCE}, ROUTER_BASE_PATH=${ROUTER_BASE_PATH}`)
 
-const Server = new server(SOURCE, PORT, HOST, CONFIG_PATH, METADATA_PATH, ROUTER_BASE_PATH)
+const Server = new server(SOURCE, PORT, HOST, CONFIG_PATH, METADATA_PATH, ROUTER_BASE_PATH, VERSIONS_PATH)
 Server.start()

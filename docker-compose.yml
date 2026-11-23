@@ -20,6 +20,11 @@ services:
       # The config directory needs to be on the same physical machine
       # you are running ABS on
       - ./config:/config
+      # Fork: re-encodes and other file versions are written here (library folders can be read-only).
+      # Without this mount (and VERSIONS_PATH) they go to /metadata/versions.
+      # - ./versions:/versions
+    # environment:
+    #   - VERSIONS_PATH=/versions
     restart: unless-stopped
     # You can use the following user directive to run the ABS
     # docker container as a specific user. You will need to change

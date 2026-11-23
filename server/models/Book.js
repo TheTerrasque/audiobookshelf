@@ -285,14 +285,16 @@ class Book extends Model {
    * Supported mime types are sent from the web client and are retrieved using the browser Audio player "canPlayType" function.
    *
    * @param {string[]} supportedMimeTypes
+   * @param {string} [_episodeId] - unused for books (keeps the LibraryItem/Podcast call signature)
+   * @param {Object[]} [audioFiles] - check these files instead (e.g. a user's selected file version)
    * @returns {boolean}
    */
-  checkCanDirectPlay(supportedMimeTypes) {
+  checkCanDirectPlay(supportedMimeTypes, _episodeId = null, audioFiles = null) {
     if (!Array.isArray(supportedMimeTypes)) {
       Logger.error(`[Book] checkCanDirectPlay: supportedMimeTypes is not an array`, supportedMimeTypes)
       return false
     }
-    return this.includedAudioFiles.every((af) => supportedMimeTypes.includes(af.mimeType))
+    return (audioFiles || this.includedAudioFiles).every((af) => supportedMimeTypes.includes(af.mimeType))
   }
 
   /**
@@ -300,11 +302,13 @@ class Book extends Model {
    * AudioTrack is the AudioFile with startOffset, contentUrl and title
    *
    * @param {string} libraryItemId
+   * @param {string} [_episodeId] - unused for books (keeps the LibraryItem/Podcast call signature)
+   * @param {Object[]} [audioFiles] - build tracks from these files instead (e.g. a user's selected file version)
    * @returns {AudioTrack[]}
    */
-  getTracklist(libraryItemId) {
+  getTracklist(libraryItemId, _episodeId = null, audioFiles = null) {
     let startOffset = 0
-    return this.includedAudioFiles.map((af) => {
+    return (audioFiles || this.includedAudioFiles).map((af) => {
       const track = structuredClone(af)
       track.title = af.metadata.filename
       track.startOffset = startOffset

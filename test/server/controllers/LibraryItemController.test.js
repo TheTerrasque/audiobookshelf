@@ -476,4 +476,54 @@ describe('LibraryItemController', () => {
       expect(fakeRes.sendStatus.calledWith(403)).to.be.true
     })
   })
+
+  describe('middleware version file fallback', () => {
+    let itemId, versionIno, user
+
+    beforeEach(async () => {
+      const lib = await Database.libraryModel.create({ name: 'Lib V', mediaType: 'book' })
+      const folder = await Database.libraryFolderModel.create({ path: '/lv', libraryId: lib.id })
+      const book = await Database.bookModel.create({ title: 'BV', audioFiles: [], tags: [], narrators: [], genres: [], chapters: [] })
+      const li = await Database.libraryItemModel.create({ libraryFiles: [], mediaId: book.id, mediaType: 'book', libraryId: lib.id, libraryFolderId: folder.id })
+      itemId = li.id
+      versionIno = 'ver_abcdef123456_1'
+      await Database.mediaVersionModel.create({ libraryItemId: itemId, kind: 'audio', label: 'v', files: [{ ino: versionIno, metadata: { filename: 'a.m4b' }, duration: 1 }], duration: 1 })
+      user = { username: 'test', canDelete: true, canUpdate: true, checkCanAccessLibraryItem: () => true }
+    })
+
+    const run = async (method, path) => {
+      const req = { params: { id: itemId, fileid: versionIno }, method, path, user }
+      const res = { sendStatus: sinon.spy() }
+      const next = sinon.spy()
+      await LibraryItemController.middleware.bind(apiRouter)(req, res, next)
+      return { req, res, next }
+    }
+
+    it('resolves a version ino for GET /file/:fileid', async () => {
+      const { req, res, next } = await run('GET', `/${itemId}/file/${versionIno}`)
+      expect(next.calledOnce).to.be.true
+      expect(res.sendStatus.called).to.be.false
+      expect(req.libraryFile.ino).to.equal(versionIno)
+      expect(req.mediaVersion).to.exist
+    })
+
+    it('does not resolve for DELETE', async () => {
+      const { res, next } = await run('DELETE', `/${itemId}/file/${versionIno}`)
+      expect(next.called).to.be.false
+      expect(res.sendStatus.calledWith(404)).to.be.true
+    })
+
+    it('does not resolve for ebook paths', async () => {
+      const { res, next } = await run('GET', `/${itemId}/ebook/${versionIno}`)
+      expect(next.called).to.be.false
+      expect(res.sendStatus.calledWith(404)).to.be.true
+    })
+
+    it('404s for an unknown version ino', async () => {
+      versionIno = 'ver_unknown_9'
+      const { res, next } = await run('GET', `/${itemId}/file/${versionIno}`)
+      expect(next.called).to.be.false
+      expect(res.sendStatus.calledWith(404)).to.be.true
+    })
+  })
 })

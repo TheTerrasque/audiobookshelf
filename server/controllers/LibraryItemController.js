@@ -20,6 +20,7 @@ const CacheManager = require('../managers/CacheManager')
 const CoverManager = require('../managers/CoverManager')
 const ShareManager = require('../managers/ShareManager')
 const ComicPageCacheManager = require('../managers/ComicPageCacheManager')
+const mediaVersions = require('../utils/mediaVersions')
 
 /**
  * @typedef RequestUserObject
@@ -72,6 +73,10 @@ class LibraryItemController {
     const includeEntities = (req.query.include || '').split(',')
     if (req.query.expanded == 1) {
       const item = req.libraryItem.toOldJSONExpanded()
+
+      // Fork: list file versions and swap in the user's selected audio version
+      // (?originalFiles=1 keeps the library files, for editing tools like chapters and encoders)
+      await mediaVersions.applyToExpandedItemJson(item, req.user, req.libraryItem, { originalFiles: req.query.originalFiles == 1 })
 
       // Include users media progress
       if (includeEntities.includes('progress')) {
@@ -979,7 +984,7 @@ class LibraryItemController {
       return res.sendStatus(403)
     }
 
-    const audioFile = req.libraryItem.getAudioFileWithIno(req.params.fileid)
+    const audioFile = req.libraryItem.getAudioFileWithIno(req.params.fileid) || (req.mediaVersion ? req.libraryFile : null)
     if (!audioFile) {
       Logger.error(`[LibraryItemController] Audio file not found with inode value ${req.params.fileid}`)
       return res.sendStatus(404)
@@ -1399,6 +1404,14 @@ class LibraryItemController {
     // For library file routes, get the library file
     if (req.params.fileid) {
       req.libraryFile = req.libraryItem.getLibraryFileWithIno(req.params.fileid)
+      // Fork: file versions live outside the library folder; allow reading (never deleting) them by ino
+      if (!req.libraryFile && req.method === 'GET' && !req.path.includes('/ebook')) {
+        const found = await mediaVersions.findVersionFileByIno(req.libraryItem.id, req.params.fileid)
+        if (found) {
+          req.libraryFile = found.file
+          req.mediaVersion = found.version
+        }
+      }
       if (!req.libraryFile) {
         Logger.error(`[LibraryItemController] Library file "${req.params.fileid}" does not exist for library item`)
         return res.sendStatus(404)

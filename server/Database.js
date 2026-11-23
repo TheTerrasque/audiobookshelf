@@ -152,6 +152,11 @@ class Database {
     return this.models.mediaItemShare
   }
 
+  /** @type {typeof import('./models/MediaVersion')} */
+  get mediaVersionModel() {
+    return this.models.mediaVersion
+  }
+
   /** @type {typeof import('./models/Device')} */
   get deviceModel() {
     return this.models.device
@@ -340,6 +345,7 @@ class Database {
     require('./models/Setting').init(this.sequelize)
     require('./models/CustomMetadataProvider').init(this.sequelize)
     require('./models/MediaItemShare').init(this.sequelize)
+    require('./models/MediaVersion').init(this.sequelize)
 
     return this.sequelize.sync({ force, alter: false })
   }

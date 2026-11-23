@@ -621,6 +621,8 @@ class User extends Model {
       isOldToken: this.isOldToken,
       mediaProgress: this.mediaProgresses?.map((mp) => mp.getOldMediaProgress()) || [],
       seriesHideFromContinueListening: [...seriesHideFromContinueListening],
+      // Fork: chosen file version per library item, { [libraryItemId]: { audio?: versionId } }
+      mediaVersionSelections: structuredClone(this.extraData?.mediaVersions || {}),
       bookmarks: this.bookmarks?.map((b) => ({ ...b })) || [],
       isActive: this.isActive,
       isLocked: this.isLocked,

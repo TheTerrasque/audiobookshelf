@@ -132,6 +132,8 @@
 
           <tables-tracks-table v-if="tracks.length" :title="$strings.LabelStatsAudioTracks" :tracks="tracksWithAudioFile" :is-file="isFile" :library-item-id="libraryItemId" class="mt-6" />
 
+          <tables-versions-table v-if="!isPodcast" :library-item="libraryItem" class="mt-6" @changed="refreshLibraryItem" />
+
           <tables-podcast-lazy-episodes-table ref="episodesTable" v-if="isPodcast" :library-item="libraryItem" />
 
           <tables-ebook-files-table v-if="ebookFiles.length" :library-item="libraryItem" class="mt-6" />
@@ -592,9 +594,25 @@ export default {
       if (!this.$refs.description) return
       this.isDescriptionClamped = this.$refs.description.scrollHeight > this.$refs.description.clientHeight
     },
+    async refreshLibraryItem() {
+      // Fork: re-fetch so the user's selected file version is applied to tracks/duration
+      const item = await this.$axios.$get(`/api/items/${this.libraryItemId}?expanded=1&include=downloads,rssfeed,share`).catch((error) => {
+        console.error('Failed to refresh item', error)
+        return null
+      })
+      if (item) {
+        this.libraryItem = item
+        this.$nextTick(this.checkDescriptionClamped)
+      }
+    },
     libraryItemUpdated(libraryItem) {
       if (libraryItem.id === this.libraryItemId) {
         console.log('Item was updated', libraryItem)
+        // Fork: socket payloads carry the original files; re-fetch when this user plays a file version
+        if (this.libraryItem?.media?.selectedVersions?.audio) {
+          this.refreshLibraryItem()
+          return
+        }
         this.libraryItem = libraryItem
         this.$nextTick(this.checkDescriptionClamped)
       }
