@@ -10,6 +10,7 @@ const { isWritable } = require('../utils/fileUtils')
 const mediaVersions = require('../utils/mediaVersions')
 const TrackProgressMonitor = require('../objects/TrackProgressMonitor')
 const audioProcessing = require('../utils/audioProcessing')
+const audioParts = require('../utils/audioParts')
 
 /**
  * @typedef AbMergeEncodeOptions
@@ -25,6 +26,7 @@ const audioProcessing = require('../utils/audioProcessing')
  * @property {string} [voiceEq]
  * @property {string} [denoise]
  * @property {string} [speed]
+ * @property {string} [partMinutes] - fork: split the result into parts of about this many minutes
  */
 
 class AbMergeManager {
@@ -69,14 +71,16 @@ class AbMergeManager {
     const task = new Task()
 
     // Fork: the m4b becomes a new file version outside the library folder; originals are never touched
-    const { label: requestedLabel, normalize, loudnessTarget, truePeak, loudnessRange, compress, voiceEq, denoise, speed, ...encodeOptions } = options || {}
+    const { label: requestedLabel, normalize, loudnessTarget, truePeak, loudnessRange, compress, voiceEq, denoise, speed, partMinutes: rawPartMinutes, ...encodeOptions } = options || {}
+    // Throws on invalid values; ToolsController validates first
+    const partMinutes = audioParts.parsePartMinutes(rawPartMinutes)
     // Throws on invalid values; ToolsController validates first so this only fails for direct callers
     const processing = audioProcessing.parseAudioProcessingOptions({ normalize, loudnessTarget, truePeak, loudnessRange, compress, voiceEq, denoise, speed })
     const processingSummary = audioProcessing.summarizeAudioProcessing(processing)
     options = { ...encodeOptions, audioFilters: audioProcessing.buildAudioFilters(processing) }
     // A speed change makes the version shorter/longer; positions map between timelines by this factor
     const timeScale = processing.speed && processing.speed !== 1 ? 1 / processing.speed : 1
-    const versionLabel = (typeof requestedLabel === 'string' && requestedLabel.trim()) || mediaVersions.defaultVersionLabel(['m4b', options.bitrate, timeScale !== 1 ? `${processing.speed}x` : null].filter(Boolean).join(' '))
+    const versionLabel = (typeof requestedLabel === 'string' && requestedLabel.trim()) || mediaVersions.defaultVersionLabel(['m4b', options.bitrate, timeScale !== 1 ? `${processing.speed}x` : null, partMinutes ? `${partMinutes}min parts` : null].filter(Boolean).join(' '))
     const versionDir = await mediaVersions.getNewVersionDir(libraryItem, versionLabel)
 
     const audiobookBaseName = libraryItem.isFile ? Path.basename(libraryItem.path, Path.extname(libraryItem.path)) : Path.basename(libraryItem.path)
@@ -100,6 +104,9 @@ class AbMergeManager {
       chapters: libraryItem.media.chapters?.map((c) => ({ ...c, start: c.start * timeScale, end: c.end * timeScale })),
       coverPath: libraryItem.media.coverPath,
       ffmetadataPath,
+      partMinutes,
+      partsDir: Path.join(itemCachePath, 'parts'),
+      audiobookBaseName,
       duration: libraryItem.media.duration * timeScale,
       timeScale,
       processingSummary,
@@ -166,8 +173,11 @@ class AbMergeManager {
       task
     })
 
-    const encodeFraction = 0.95
-    const embedFraction = 1 - encodeFraction
+    // Fork: optional split into parts after encoding (see utils/audioParts.js)
+    const partCuts = task.data.partMinutes ? audioParts.computePartCuts(task.data.duration, task.data.partMinutes * 60, task.data.chapters) : []
+    const splitFraction = partCuts.length ? 0.05 : 0
+    const encodeFraction = 0.95 - splitFraction
+    const embedFraction = 0.05
     try {
       const trackProgressMonitor = new TrackProgressMonitor(
         libraryItem.media.includedAudioFiles.map((t) => t.duration * task.data.timeScale),
@@ -229,17 +239,60 @@ class AbMergeManager {
       return
     }
 
-    // Move the m4b into the version directory and register it as a new file version
-    Logger.debug(`[AbMergeManager] Moving m4b from ${task.data.tempFilepath} to ${task.data.targetFilepath}`)
+    // Fork: cut the m4b into parts (no re-encode)
+    let partPaths = null
+    if (partCuts.length) {
+      try {
+        await fs.emptyDir(task.data.partsDir)
+        task.data.ffmpeg = new Ffmpeg()
+        partPaths = await ffmpegHelpers.splitAudioFile(
+          task.data.tempFilepath,
+          partCuts,
+          task.data.partsDir,
+          task.data.duration,
+          (progress) => {
+            SocketAuthority.adminEmitter('task_progress', { libraryItemId: libraryItem.id, progress: 100 * (encodeFraction + embedFraction) + progress * splitFraction })
+          },
+          task.data.ffmpeg
+        )
+        delete task.data.ffmpeg
+        Logger.info(`[AbMergeManager] Split "${task.data.targetFilename}" into ${partPaths.length} parts`)
+      } catch (error) {
+        if (error.message === 'FFMPEG_CANCELED') {
+          Logger.info(`[AbMergeManager] Task cancelled ${task.id}`)
+        } else {
+          Logger.error(`[AbMergeManager] Failed to split "${task.data.tempFilepath}" into parts`, error)
+          task.setFailed({ text: 'Failed to split audio file into parts', key: 'MessageTaskFailedToSplitIntoParts' })
+          this.removeTask(task, true)
+        }
+        return
+      }
+    }
+
+    // Move the m4b (or its parts) into the version directory and register it as a new file version
+    Logger.debug(`[AbMergeManager] Moving m4b from ${task.data.tempFilepath} to ${task.data.versionDir}`)
     try {
-      await fs.move(task.data.tempFilepath, task.data.targetFilepath, { overwrite: false })
+      let filePaths = [task.data.targetFilepath]
+      if (partPaths) {
+        const digits = Math.max(2, String(partPaths.length).length)
+        filePaths = []
+        for (const [i, partPath] of partPaths.entries()) {
+          const target = Path.join(task.data.versionDir, `${task.data.audiobookBaseName} - Part ${String(i + 1).padStart(digits, '0')}.m4b`)
+          await fs.move(partPath, target, { overwrite: false })
+          filePaths.push(target)
+        }
+        await fs.remove(task.data.tempFilepath)
+        await fs.remove(task.data.partsDir)
+      } else {
+        await fs.move(task.data.tempFilepath, task.data.targetFilepath, { overwrite: false })
+      }
       const version = await mediaVersions.createAudioVersion({
         libraryItem,
         dirPath: task.data.versionDir,
-        filePaths: [task.data.targetFilepath],
+        filePaths,
         label: task.data.versionLabel,
         tool: 'encode-m4b',
-        options: { codec: encodingOptions.codec, bitrate: encodingOptions.bitrate, channels: encodingOptions.channels, ...task.data.processingSummary },
+        options: { codec: encodingOptions.codec, bitrate: encodingOptions.bitrate, channels: encodingOptions.channels, ...task.data.processingSummary, ...(partPaths ? { partMinutes: task.data.partMinutes, parts: partPaths.length } : {}) },
         chapters: task.data.chapters
       })
       task.data.versionId = version.id
@@ -291,6 +344,7 @@ class AbMergeManager {
           Logger.error('[AbMergeManager] Failed to remove version directory', err)
         })
       }
+      if (task.data.partsDir) await fs.remove(task.data.partsDir).catch(() => {})
       // On failed tasks remove the bad file if it exists
       if (await fs.pathExists(task.data.tempFilepath)) {
         await fs

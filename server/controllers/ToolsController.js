@@ -1,6 +1,7 @@
 const { Request, Response, NextFunction } = require('express')
 const Logger = require('../Logger')
 const audioProcessing = require('../utils/audioProcessing')
+const audioParts = require('../utils/audioParts')
 const Database = require('../Database')
 
 /**
@@ -55,6 +56,8 @@ class ToolsController {
       if (options.codec === 'copy' && audioProcessing.hasAudioProcessing(processing)) {
         return res.status(400).send('Audio processing needs re-encoding and cannot be used with the copy codec')
       }
+      // Fork: optional split into parts
+      audioParts.parsePartMinutes(options.partMinutes)
     } catch (error) {
       return res.status(400).send(error.message)
     }

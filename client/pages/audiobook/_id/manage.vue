@@ -104,6 +104,22 @@
       <div v-else-if="isM4BTool" class="mb-4">
         <widgets-encoder-options-card ref="encoderOptionsCard" :audio-tracks="audioFiles" :disabled="processing || isTaskFinished" />
         <widgets-audio-processing-options-card ref="audioProcessingCard" :disabled="processing || isTaskFinished" />
+        <!-- Fork: split the result into parts -->
+        <div class="w-full py-2">
+          <div class="px-4 py-2 border border-black-200 rounded-t-md bg-primary/70">
+            <p class="text-sm">{{ $strings.HeaderSplitIntoParts }}</p>
+          </div>
+          <div class="p-4 md:p-6 border border-t-0 border-black-200 rounded-b-md bg-bg">
+            <div class="flex flex-wrap items-center gap-3">
+              <ui-toggle-btns v-model="partPreset" :items="partItems" :disabled="processing || isTaskFinished" />
+              <div v-if="partPreset === 'custom'" class="w-28">
+                <ui-text-input v-model="customPartMinutes" type="number" min="1" max="600" :disabled="processing || isTaskFinished" />
+              </div>
+              <p v-if="estimatedPartCount > 1" class="text-sm text-gray-300">≈ {{ $getString('LabelPartsCount', [estimatedPartCount]) }}</p>
+            </div>
+            <p class="text-xs text-gray-300 mt-1">{{ $strings.LabelSplitIntoPartsHelp }}</p>
+          </div>
+        </div>
       </div>
 
       <div class="mb-4">
@@ -215,6 +231,8 @@ export default {
       selectedTool: 'embed',
       isCancelingEncode: false,
       versionLabel: '',
+      partPreset: '0',
+      customPartMinutes: 45,
       encodingOptions: {
         bitrate: '128k',
         channels: '2',
@@ -306,6 +324,24 @@ export default {
     isMetadataEmbedQueued() {
       return this.queuedEmbedLIds.some((lid) => lid === this.libraryItemId)
     },
+    partItems() {
+      return [
+        { text: this.$strings.LabelPresetOff, value: '0' },
+        { text: '15 min', value: '15' },
+        { text: '30 min', value: '30' },
+        { text: '60 min', value: '60' },
+        { text: this.$strings.LabelPresetCustom, value: 'custom' }
+      ]
+    },
+    partMinutes() {
+      const value = this.partPreset === 'custom' ? Number(this.customPartMinutes) : Number(this.partPreset)
+      return Number.isFinite(value) && value > 0 ? value : 0
+    },
+    estimatedPartCount() {
+      // Same rounding as the server (utils/audioParts.js); speed changes are not taken into account
+      if (!this.partMinutes) return 0
+      return Math.round((this.media.duration || 0) / (this.partMinutes * 60))
+    },
     encodeTaskHasEncodingOptions() {
       return this.isM4BTool && !!this.encodeTask?.data.encodeOptions && Object.keys(this.encodeTask.data.encodeOptions).length > 0
     }
@@ -351,6 +387,7 @@ export default {
 
       const queryParams = new URLSearchParams({ ...encodeOptions, ...processingOptions })
       if (this.versionLabel.trim()) queryParams.set('label', this.versionLabel.trim())
+      if (this.partMinutes) queryParams.set('partMinutes', String(this.partMinutes))
 
       this.processing = true
       this.$axios

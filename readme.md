@@ -40,6 +40,7 @@
 - **Name your versions.** Give a version a name when you create it on the tools page (for example "Car mix" or "1.5x"). The item page lists the versions with the encoder settings each was made with.
 - **Pick which version you listen to.** Each user chooses a version per book on the item page (or in the app fork). Streaming, transcoding, downloads and the mobile app all use it. Admins can rename and delete versions.
 - **Clean up the audio while encoding.** The M4B encoder can normalize loudness (EBU R128, with adjustable target, true peak and range), compress dynamic range, add a voice clarity EQ, reduce noise, and change speed from 0.5× to 3× without changing pitch. Chapters are adjusted to match. These options need re-encoding, so they can't be combined with the Copy codec.
+- **Split a book into parts.** The M4B encoder can cut its result into parts of 15, 30 or 60 minutes (or any length), moving each cut to a nearby chapter start. Players play the parts back to back as one book. With the [app fork](https://github.com/TheTerrasque/audiobookshelf-app) you can start listening offline as soon as the first parts are downloaded, and delete parts you've already heard to save space on the phone. Works with the Copy codec too, so an existing M4B can be split without re-encoding.
 - **Sped-up versions keep your place.** Progress and bookmarks stay on the original timeline and are converted for the version you've picked, including offline listening from a downloaded copy, so switching versions never loses your position.
 
 ### Mobile app
@@ -65,6 +66,7 @@
 - **Comic page cache:** an in-memory LRU sized in bytes (`COMIC_PAGE_CACHE_MAX_BYTES`, default 64 MB) and a pool of open archives (`COMIC_EXTRACTOR_POOL_MAX`, default 4). CBZ files are streamed; CBR files are unpacked into a temp directory per archive, protected against entries escaping it (zip-slip).
 - **Comic file order:** `PATCH /api/items/:id/ebook`. Per-file progress is stored in `mediaProgresses.ebookFileIno` (migration `v2.38.1`).
 - **Versions:** stored under `VERSIONS_PATH` (default `<METADATA_PATH>/versions`). `GET/PATCH/DELETE /api/items/:id/versions[/:versionId]` (rename and delete are admin only), `PATCH /api/me/item/:id/version` to choose one. Migration `v2.38.2-add-media-versions`.
+- **Split into parts:** `partMinutes=<1-600>` on `POST /api/tools/item/:id/encode-m4b`. The encoded m4b is cut with ffmpeg's segment muxer (`-c copy`, no re-encode, gapless) into `<book> - Part NN.m4b` files of one version; the version's `options` record `partMinutes` and `parts`.
 - **Quick connect link:** `audiobookshelf://connect?address=<server url>&username=<username>`.
 
 </details>

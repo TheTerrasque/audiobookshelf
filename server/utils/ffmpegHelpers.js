@@ -527,3 +527,62 @@ async function mergeAudioFiles(audioTracks, duration, itemCachePath, outputFileP
 }
 
 module.exports.mergeAudioFiles = mergeAudioFiles
+
+/**
+ * Fork: cut an audio file into parts at the given times without re-encoding (ffmpeg segment muxer).
+ * Parts are written as `<outputDir>/part001.m4b`, `part002.m4b`, ... and play back to back gaplessly.
+ * Metadata tags are kept on every part; chapters and the embedded cover are dropped (the item has both).
+ *
+ * @param {string} inputPath - mp4/m4b file
+ * @param {number[]} cuts - cut times in seconds (see utils/audioParts.js)
+ * @param {string} outputDir - existing, empty directory
+ * @param {number} duration - input duration, for progress
+ * @param {(percent: number) => void} [progressCB]
+ * @param {import('../libs/fluentFfmpeg')} [ffmpeg]
+ * @returns {Promise<string[]>} part paths in play order
+ */
+async function splitAudioFile(inputPath, cuts, outputDir, duration, progressCB = null, ffmpeg = Ffmpeg()) {
+  ffmpeg
+    .input(inputPath)
+    .outputOptions([
+      '-map 0:a',
+      '-map_metadata 0',
+      '-map_chapters -1',
+      '-c copy',
+      '-f segment',
+      `-segment_times ${cuts.map((c) => c.toFixed(3)).join(',')}`,
+      '-segment_format mp4',
+      '-segment_format_options movflags=+faststart',
+      '-reset_timestamps 1'
+    ])
+    .output(filePathToPOSIX(Path.join(outputDir, 'part%03d.m4b')))
+
+  await new Promise((resolve, reject) => {
+    ffmpeg
+      .on('start', (cmd) => {
+        Logger.debug(`[ffmpegHelpers] Split audio file ffmpeg command: ${cmd}`)
+      })
+      .on('progress', (progress) => {
+        if (!progressCB || !progress.timemark || !duration) return
+        progressCB(Math.min(100, (ffmpgegUtils.timemarkToSeconds(progress.timemark) / duration) * 100))
+      })
+      .on('end', () => resolve())
+      .on('error', (err, stdout, stderr) => {
+        if (err.message && err.message.includes('SIGKILL')) {
+          Logger.info(`[ffmpegHelpers] Split audio file killed by user`)
+          reject(new Error('FFMPEG_CANCELED'))
+        } else {
+          Logger.error(`[ffmpegHelpers] Split audio file error ${err}`)
+          Logger.error('ffmpeg stderr:', stderr)
+          reject(err)
+        }
+      })
+    ffmpeg.run()
+  })
+
+  const names = (await fs.readdir(outputDir)).filter((name) => /^part\d{3,}\.m4b$/.test(name)).sort()
+  if (!names.length) throw new Error('ffmpeg produced no parts')
+  return names.map((name) => Path.join(outputDir, name))
+}
+
+module.exports.splitAudioFile = splitAudioFile

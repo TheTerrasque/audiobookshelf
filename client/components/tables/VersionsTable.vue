@@ -118,6 +118,7 @@ export default {
       if (o.compress) parts.push(`${this.$strings.LabelDynamicRangeCompression}: ${o.compress}`)
       if (o.voiceEq) parts.push(this.$strings.LabelVoiceClarity)
       if (o.denoise) parts.push(`${this.$strings.LabelNoiseReduction}: ${o.denoise}`)
+      if (o.parts) parts.push(this.$getString('LabelPartsCount', [o.parts]))
       return parts.join(' · ')
     },
     toolLabel(tool) {
