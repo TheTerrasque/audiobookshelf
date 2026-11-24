@@ -42,7 +42,7 @@
 ### Mobile app
 
 - **Connect the app with a QR code.** **Account → Connect Mobile App** shows a QR code. Scan it with your phone and the [app fork](https://github.com/TheTerrasque/audiobookshelf-app) opens with the server address and your username filled in; you only enter your password. The code contains no credentials.
-- **A matching app.** The [app fork](https://github.com/TheTerrasque/audiobookshelf-app) reads comics page by page from this server, follows multi-file comics, has the audio version picker and scans the QR codes.
+- **A matching app.** The [app fork](https://github.com/TheTerrasque/audiobookshelf-app) reads comics page by page from this server, follows multi-file comics and can reorder their files, has the format filter and the audio version picker, scans the QR codes, and fixes epub page turning and progress on phones.
 
 ### Hosting
 
