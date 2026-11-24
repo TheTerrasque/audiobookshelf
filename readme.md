@@ -25,18 +25,21 @@
 
 ### Comics
 
-- **Big comics open instantly.** CBZ and CBR pages are served one at a time by the server instead of the browser downloading and unpacking the whole archive. Pages are cached in memory, so paging back and forth is fast.
-- **A better comic reader.** Fit to screen, fit to width or custom zoom, mouse-wheel zoom, a choice of background colour, scrolling to the top on each new page, and a cleaner top bar.
-- **Series in one book.** A book with several comic files (one per volume, say) reads straight through: the next page after the last page of one file is the first page of the next. A file list lets you jump between them, and you can change the file order.
-- **Resume in the right volume.** Reading progress remembers which file you were in, on the web and in the app fork.
-- **Comic format filter.** Filter a library by audiobook, ebook or comic.
-- **Older comics open too.** Books scanned before the format was recorded are recognised from the file extension.
+- **Big comics open instantly.** CBZ and CBR pages are served one at a time by the server instead of the browser downloading and unpacking the whole archive. Pages are cached in memory and the next page is preloaded, so paging back and forth is fast.
+- **A better comic reader.** Fit to screen (the default), fit to width or custom zoom (10–400%, also with the mouse wheel), black, dark or white background, and scrolling back to the top on each new page (can be turned off).
+- **Quick navigation.** Click the page counter for a numbered list of pages to jump to, or the file counter for a list of the book's comic files. An info button shows the comic's ComicInfo.xml details when it has them.
+- **Series in one book.** A book with several comic files (one per volume, say) reads straight through: going past the last page of one file opens the next, and going back from the first page opens the end of the previous one.
+- **Put the files in order.** **Reorder** in a book's Ebook Files list sets the reading order by drag and drop, or tick several files and move them to the top or bottom in one go (handy for series with dozens of files).
+- **Resume in the right volume.** Reading progress remembers which file you were in, on the web and in the app fork, and overall progress keeps growing as you move through the volumes instead of starting over at each one.
+- **Format filter.** Filter a library by audiobook, ebook or comic.
+- **Older books work fully.** Books scanned before the ebook format was recorded open as comics and show up in Continue Reading.
 
 ### Audio versions
 
 - **Your library files are never modified.** The M4B encoder and "embed metadata" save their output as a separate *version* of the book in a version store, so library folders can be mounted read-only and the originals are always kept.
+- **Name your versions.** Give a version a name when you create it on the tools page (for example "Car mix" or "1.5x"). The item page lists the versions with the encoder settings each was made with.
 - **Pick which version you listen to.** Each user chooses a version per book on the item page (or in the app fork). Streaming, transcoding, downloads and the mobile app all use it. Admins can rename and delete versions.
-- **Clean up the audio while encoding.** The M4B encoder can normalize loudness (EBU R128, adjustable), compress dynamic range, add a voice clarity EQ, reduce noise, and change speed without changing pitch.
+- **Clean up the audio while encoding.** The M4B encoder can normalize loudness (EBU R128, with adjustable target, true peak and range), compress dynamic range, add a voice clarity EQ, reduce noise, and change speed from 0.5× to 3× without changing pitch. Chapters are adjusted to match. These options need re-encoding, so they can't be combined with the Copy codec.
 - **Sped-up versions keep your place.** Progress and bookmarks stay on the original timeline and are converted for the version you've picked, including offline listening from a downloaded copy, so switching versions never loses your position.
 
 ### Mobile app
@@ -48,6 +51,12 @@
 
 - **Ready-made Docker images** for amd64 and arm64 on GitHub Container Registry, built from every push. See [Running the fork with Docker](#running-the-fork-with-docker).
 - **A separate version store** for the audio versions. See [Hosting the version store](#hosting-the-version-store).
+
+### Reliability and security
+
+- **Safe CBR extraction.** File names inside a CBR archive can't escape its temporary folder (zip-slip), and each open archive gets its own folder, so two comics read at the same time can't overwrite each other's pages.
+- **Steady under load.** Several readers on the same comic share one open archive, an archive is never closed while a page is being read from it, and deleting a book clears its cached pages.
+- **No wrong pages after switching volumes.** A slow page that arrives after you've moved to another file is discarded instead of being shown in the new one.
 
 <details>
 <summary>Technical details (API, settings, migrations)</summary>
